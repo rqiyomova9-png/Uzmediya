@@ -4326,24 +4326,37 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 4. Kanal boshqarish ─────────────────────────────
     if is_any_admin(uid) and context.user_data.get("channel_manage_menu"):
         ch_states = ("add_channel_username", "add_channel_title", "add_channel_url", "add_channel",
-                     "add_simple_link_title", "add_simple_link_url")
+                     "add_simple_link_title", "add_simple_link_url", "add_soruvli_kanal",
+                     "add_soruvli_kanal_title")
         if context.user_data.get("admin_state") in ch_states:
             handled = await admin_state_handler(update, context, text)
             if handled: return
-        if text in (bt("admin_panel"), bt("orqaga")) or strip_emoji_prefix(text) in (
-            strip_emoji_prefix(bt("admin_panel")), strip_emoji_prefix(bt("orqaga"))
+
+        logger.info(f"[KANAL MENU] uid={uid} text='{text}' state={context.user_data.get('admin_state')}")
+
+        # Orqaga / Admin panel tugmalari
+        if text in (bt("admin_panel"), bt("orqaga"), bt("boshqarish")) or strip_emoji_prefix(text) in (
+            strip_emoji_prefix(bt("admin_panel")), strip_emoji_prefix(bt("orqaga")),
+            strip_emoji_prefix(bt("boshqarish"))
         ):
             context.user_data.pop("channel_manage_menu", None)
             context.user_data.pop("admin_state", None)
             await sm(context.bot, uid, "Admin panel", admin_menu_kb(uid))
             return
-        if text == bt("kanal_qosh") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_qosh")):
+
+        # Kanal qo'shish
+        text_plain = strip_emoji_prefix(text).strip()
+        kanal_qosh_plain = strip_emoji_prefix(bt("kanal_qosh")).strip()
+        if text == bt("kanal_qosh") or text_plain == kanal_qosh_plain or "kanal" in text_plain.lower() and "qo" in text_plain.lower():
             context.user_data["admin_state"] = "add_channel_username"
             await sm(context.bot, uid,
                 "➕ <b>Kanal qo'shish</b>\n\nKanal <b>username</b>ini kiriting:\n"
                 "<i>Misol: @mykinochannel yoki https://t.me/mykinochannel</i>")
             return
-        if text == bt("kanal_uch") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_uch")):
+
+        # Kanal o'chirish
+        kanal_uch_plain = strip_emoji_prefix(bt("kanal_uch")).strip()
+        if text == bt("kanal_uch") or text_plain == kanal_uch_plain:
             channels = RAM.channels
             simple   = RAM.simple_links or []
             if not channels and not simple:
@@ -4353,17 +4366,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan elementni tanlang 👇",
                 channel_delete_inline_kb(channels, simple))
             return
-        if text == bt("kanal_royxat") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_royxat")):
+
+        # Kanal ro'yxat
+        kanal_royxat_plain = strip_emoji_prefix(bt("kanal_royxat")).strip()
+        if text == bt("kanal_royxat") or text_plain == kanal_royxat_plain:
             await sm(context.bot, uid, _channels_list_text(), channel_manage_kb())
             return
-        if text == bt("oddiy_havola") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("oddiy_havola")):
+
+        # Oddiy havola
+        oddiy_plain = strip_emoji_prefix(bt("oddiy_havola")).strip()
+        if text == bt("oddiy_havola") or text_plain == oddiy_plain:
             context.user_data["admin_state"] = "add_simple_link_title"
             await sm(context.bot, uid,
                 "🔗 <b>Oddiy havola qo'shish</b>\n\n"
                 "Bu havola foydalanuvchilarga ko'rsatiladi, lekin bot obunani <b>tekshirmaydi</b>.\n\n"
                 "Havola nomini kiriting (masalan: <code>Kino kanali</code>):")
             return
-        if text == bt("soruvli_kanal") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("soruvli_kanal")):
+
+        # So'rovli kanal
+        soruvli_plain = strip_emoji_prefix(bt("soruvli_kanal")).strip()
+        if text == bt("soruvli_kanal") or text_plain == soruvli_plain:
             context.user_data["admin_state"] = "add_soruvli_kanal"
             await sm(context.bot, uid,
                 "📨 <b>So'rovli kanal qo'shish</b>\n\n"
@@ -4374,6 +4396,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Kanal username yoki invite linkini kiriting:\n"
                 "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
             return
+
+        # Noma'lum — qayta menyuni ko'rsatamiz
+        await sm(context.bot, uid,
+            f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nNima qilmoqchisiz?",
+            channel_manage_kb())
         return
 
     # ── 5. Admin reply_to ───────────────────────────────
