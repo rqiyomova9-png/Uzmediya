@@ -12,9 +12,51 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 try:
     import psycopg2
     import psycopg2.extras
+    from psycopg2 import pool as psycopg2_pool
     PSYCOPG2_AVAILABLE = True
 except ImportError:
     PSYCOPG2_AVAILABLE = False
+    psycopg2_pool = None
+
+# PostgreSQL CONNECTION POOL
+_PG_POOL = None
+
+def _init_pg_pool():
+    global _PG_POOL
+    if not DATABASE_URL or not PSYCOPG2_AVAILABLE or _PG_POOL:
+        return
+    try:
+        _PG_POOL = psycopg2_pool.ThreadedConnectionPool(
+            minconn=1, maxconn=5,
+            dsn=DATABASE_URL, sslmode="require"
+        )
+        logger.info("✅ PostgreSQL connection pool yaratildi (1-5 ulanish)")
+    except Exception as e:
+        logger.error(f"PostgreSQL pool xato: {e}")
+        _PG_POOL = None
+
+def _pool_conn():
+    if _PG_POOL:
+        try:
+            return _PG_POOL.getconn(), True
+        except Exception:
+            pass
+    try:
+        return psycopg2.connect(DATABASE_URL, sslmode="require"), False
+    except Exception as e:
+        logger.error(f"PG ulanish xato: {e}")
+        return None, False
+
+def _pool_release(conn, from_pool: bool):
+    if not conn:
+        return
+    try:
+        if from_pool and _PG_POOL:
+            _PG_POOL.putconn(conn)
+        else:
+            conn.close()
+    except Exception:
+        pass
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -203,7 +245,7 @@ def checkcard_create_payment(amount: int, order_id: str = None) -> dict:
                f"&shop_key={CHECKCARD_SHOP_KEY}"
                f"&amount={amount}"
                f"&order={order_id}")
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=10)
         logger.info(f"CheckCard create javob: {r.text[:300]}")
         return r.json()
     except Exception as e:
@@ -216,7 +258,7 @@ def checkcard_check_payment(order: str) -> dict:
     try:
         url = (f"{CHECKCARD_BASE_URL}?method=check"
                f"&order={order}")
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=10)
         logger.info(f"CheckCard check javob: {r.text[:200]}")
         return r.json()
     except Exception as e:
@@ -228,7 +270,7 @@ def checkcard_cancel_payment(order: str) -> dict:
     """CheckCard to'lovni bekor qiladi."""
     try:
         url = f"{CHECKCARD_BASE_URL}?method=cancel&order={order}"
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=10)
         return r.json()
     except Exception as e:
         logger.error(f"CheckCard cancel xato: {e}")
@@ -241,7 +283,7 @@ def checkcard_shop_info() -> dict:
         url = (f"{CHECKCARD_BASE_URL}?method=shop"
                f"&shop_id={CHECKCARD_SHOP_ID}"
                f"&shop_key={CHECKCARD_SHOP_KEY}")
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=10)
         return r.json()
     except Exception as e:
         logger.error(f"CheckCard shop info xato: {e}")
@@ -750,15 +792,11 @@ def _load_local() -> dict | None:
 # ══════════════════════════════════════════════════════════
 
 def _get_pg_conn():
-    """PostgreSQL ulanish hosil qiladi."""
+    """PostgreSQL ulanish hosil qiladi (pooldan)."""
     if not DATABASE_URL:
         return None
-    try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
-        return conn
-    except Exception as e:
-        logger.error(f"PostgreSQL ulanish xato: {e}")
-        return None
+    conn, _ = _pool_conn()
+    return conn
 
 
 def _pg_init_table():
@@ -794,8 +832,9 @@ def _save_postgres(data: dict, retries: int = 2) -> bool:
         return False
     for attempt in range(retries):
         conn = None
+        from_pool = False
         try:
-            conn = _get_pg_conn()
+            conn, from_pool = _pool_conn()
             if not conn:
                 raise Exception("Ulanish yo'q")
             with conn.cursor() as cur:
@@ -806,17 +845,17 @@ def _save_postgres(data: dict, retries: int = 2) -> bool:
                     SET value = EXCLUDED.value, updated_at = NOW()
                 """, (json.dumps(data, ensure_ascii=False),))
             conn.commit()
-            conn.close()
+            _pool_release(conn, from_pool)
             size_kb = len(json.dumps(data, ensure_ascii=False).encode("utf-8")) / 1024
             logger.info(f"✅ PostgreSQL saqlandi ({size_kb:.1f} KB)")
             return True
         except Exception as e:
             logger.error(f"PostgreSQL save #{attempt+1} xato: {e}")
             if conn:
-                try: conn.close()
+                try: _pool_release(conn, from_pool)
                 except: pass
         if attempt < retries - 1:
-            time.sleep(1)   # ⚡ 3s o'rniga 1s — bot bloklanmasin
+            time.sleep(1)
     return False
 
 
@@ -824,16 +863,17 @@ def _load_postgres() -> dict | None:
     """PostgreSQL dan yuklaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return None
-    for attempt in range(3):   # 6→3 urinish
+    for attempt in range(3):
         conn = None
+        from_pool = False
         try:
-            conn = _get_pg_conn()
+            conn, from_pool = _pool_conn()
             if not conn:
                 raise Exception("Ulanish yo'q")
             with conn.cursor() as cur:
                 cur.execute("SELECT value FROM bot_data WHERE key = 'main'")
                 row = cur.fetchone()
-            conn.close()
+            _pool_release(conn, from_pool)
             if row:
                 data = row[0]
                 if isinstance(data, dict):
@@ -852,10 +892,10 @@ def _load_postgres() -> dict | None:
         except Exception as e:
             logger.error(f"PostgreSQL load #{attempt+1} xato: {e}")
             if conn:
-                try: conn.close()
+                try: _pool_release(conn, from_pool)
                 except: pass
         if attempt < 2:
-            time.sleep(2)   # ⚡ 2*(n+1) o'rniga flat 2s
+            time.sleep(2)
     logger.error("❌ PostgreSQL dan yuklab bo'lmadi (3 urinish).")
     return None
 
@@ -2512,9 +2552,9 @@ def generate_movies_image(movie_slice: list, page: int = 1, total_pages: int = 1
         (25, 95, 215), (40, 160, 70), (200, 50, 60),
         (200, 120, 0), (110, 60, 190), (0, 140, 180),
     ]
-    # 4K sifat — kenglik 2160px (4K vertikal). Yozuvlar yirik va tiniq.
-    SCALE    = 2
-    IMG_W    = 1080 * SCALE   # 2160px
+    # ⚡ 1x scale — Railway free tier uchun (0.5vCPU). 4K o'rniga 1080px
+    SCALE    = 1
+    IMG_W    = 1080 * SCALE   # 1080px
     PAD_X    = 40   * SCALE
     TOP_PAD  = 24   * SCALE
     CARD_H   = 170  * SCALE
@@ -2689,7 +2729,7 @@ def generate_tolovlar_image(
     if not PIL_AVAILABLE or not pay_slice:
         return None
 
-    SCALE    = 2
+    SCALE    = 1   # ⚡ Railway free tier uchun 1x
     IMG_W    = 1080 * SCALE
     PAD_X    = 40   * SCALE
     HEADER_H = 200  * SCALE
@@ -7532,6 +7572,9 @@ def main():
     if not ADMIN_ID:
         raise RuntimeError("ADMIN_ID environment o'zgaruvchisi kiritilmagan")
 
+    # ── PostgreSQL connection pool ishga tushur ───────────
+    _init_pg_pool()
+
     # ── Railway health check serverni ishga tushur ────────
     _start_health_server()
 
@@ -7542,10 +7585,10 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .read_timeout(30)
-        .write_timeout(30)
-        .connect_timeout(30)   # ⚡ 15→30s — Railway cold start uchun
-        .pool_timeout(30)
+        .read_timeout(60)
+        .write_timeout(60)
+        .connect_timeout(30)
+        .pool_timeout(60)
         .build()
     )
 
@@ -7630,6 +7673,23 @@ def main():
         app.job_queue.run_repeating(_periodic_sync, interval=120, first=60)
         logger.info("🔄 Periodik sync yoqildi (har 2 daqiqada)")
 
+        # ── Keep-alive: Railway serverini uyquga ketishidan himoya ──
+        # Railway free tier 30 daqiqada faollik bo'lmasa o'chiradi.
+        # Har 4 daqiqada o'zimizga HTTP ping yuboramiz — server uyquga ketmaydi.
+        async def _keep_alive_ping(context_job):
+            try:
+                await asyncio.to_thread(
+                    requests.get,
+                    f"{RAILWAY_URL}/",
+                    timeout=8
+                )
+                logger.debug("🏓 Keep-alive ping OK")
+            except Exception as e:
+                logger.debug(f"Keep-alive ping: {e}")
+
+        app.job_queue.run_repeating(_keep_alive_ping, interval=240, first=30)
+        logger.info("🏓 Keep-alive ping yoqildi (har 4 daqiqada)")
+
     # ── XATO HANDLER — bot o'chmasin ──────────────────────
     async def error_handler(update, context):
         import traceback
@@ -7649,15 +7709,35 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info(f"🚀 Bot v20 Railway ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=["message", "callback_query", "chat_join_request"],
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=30,   # ⚡ 15→30s
-        pool_timeout=30,
-    )
+    logger.info(f"🚀 Bot v23 ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
+
+    # ── WEBHOOK vs POLLING tanlash ────────────────────────
+    # WEBHOOK_MODE=1 bo'lsa webhook (tez, 0ms latency)
+    # Aks holda polling (oddiy, har yerda ishlaydi)
+    use_webhook = os.environ.get("WEBHOOK_MODE", "0") == "1"
+
+    if use_webhook and RAILWAY_URL:
+        webhook_url = f"{RAILWAY_URL}/tgwebhook"
+        port = int(os.environ.get("PORT", 8080))
+        logger.info(f"🚀 Webhook rejimi: {webhook_url} port={port}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path="/tgwebhook",
+            webhook_url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query", "chat_join_request"],
+        )
+    else:
+        logger.info("🔄 Polling rejimi")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query", "chat_join_request"],
+            read_timeout=30,
+            write_timeout=30,
+            connect_timeout=30,
+            pool_timeout=30,
+        )
 
 
 if __name__ == "__main__":
