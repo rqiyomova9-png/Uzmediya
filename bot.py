@@ -29,7 +29,7 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8920261423:AAF3Ej38ppsWnLLYdo2aGi0Z32Rjblc-V1M"
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFAcuXlhHa1OjAIfl8vjYQQrrL7LSQatEI"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
@@ -42,7 +42,7 @@ CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "DSSD85MU60"
 CHECKCARD_BASE_URL = "https://checkcard.uz/api"
 
 # ─── RAILWAY / WEBHOOK KONFIGURATSIYASI ─────────────────────
-RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://uzmediya-production.up.railway.app"
+RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://kino-bot-mukammal-production.up.railway.app"
 CHECKCARD_WEBHOOK_PATH = "/checkcard_webhook"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
@@ -200,7 +200,7 @@ def checkcard_create_payment(amount: int, order_id: str = None) -> dict:
                f"&shop_key={CHECKCARD_SHOP_KEY}"
                f"&amount={amount}"
                f"&order={order_id}")
-        r = requests.get(url, timeout=8)
+        r = requests.get(url, timeout=20)
         logger.info(f"CheckCard create javob: {r.text[:300]}")
         return r.json()
     except Exception as e:
@@ -213,7 +213,7 @@ def checkcard_check_payment(order: str) -> dict:
     try:
         url = (f"{CHECKCARD_BASE_URL}?method=check"
                f"&order={order}")
-        r = requests.get(url, timeout=8)
+        r = requests.get(url, timeout=20)
         logger.info(f"CheckCard check javob: {r.text[:200]}")
         return r.json()
     except Exception as e:
@@ -432,17 +432,6 @@ def to_bold(text: str) -> str:
         else:                  result.append(ch)
     return ''.join(result)
 
-def from_bold(text: str) -> str:
-    """Unicode bold harflarni oddiy ASCII harflarga aylantiradi."""
-    result = []
-    for ch in text:
-        cp = ord(ch)
-        if 0x1D5D4 <= cp <= 0x1D5ED:   result.append(chr(cp - 0x1D5D4 + ord('A')))
-        elif 0x1D5EE <= cp <= 0x1D607: result.append(chr(cp - 0x1D5EE + ord('a')))
-        elif 0x1D7EC <= cp <= 0x1D7F5: result.append(chr(cp - 0x1D7EC + ord('0')))
-        else:                           result.append(ch)
-    return ''.join(result)
-
 _B = to_bold
 
 # ─── BUTTON TEXTS ──────────────────────────────────────────
@@ -641,7 +630,7 @@ def _pg_init_table():
         return False
 
 
-def _save_postgres(data: dict, retries: int = 2) -> bool:
+def _save_postgres(data: dict, retries: int = 3) -> bool:
     """PostgreSQL ga saqlaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return False
@@ -673,7 +662,7 @@ def _save_postgres(data: dict, retries: int = 2) -> bool:
                 try: conn.close()
                 except: pass
         if attempt < retries - 1:
-            time.sleep(2)
+            time.sleep(3 * (attempt + 1))
     return False
 
 
@@ -681,7 +670,7 @@ def _load_postgres() -> dict | None:
     """PostgreSQL dan yuklaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return None
-    for attempt in range(3):   # 6 dan 3 ga kamaytirildi
+    for attempt in range(6):
         conn = None
         try:
             conn = _get_pg_conn()
@@ -711,9 +700,9 @@ def _load_postgres() -> dict | None:
             if conn:
                 try: conn.close()
                 except: pass
-        if attempt < 2:
-            time.sleep(2)   # 2*(attempt+1) o'rniga flat 2 soniya
-    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (3 urinish).")
+        if attempt < 5:
+            time.sleep(2 * (attempt + 1))
+    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (6 urinish).")
     return None
 
 
@@ -808,27 +797,17 @@ def _merge_db(blob: dict | None, local: dict | None) -> dict:
 
     # Boshqa maydonlar — lokal ustun, bo'lmasa blob
     def pick(key, default):
-        # channels va simple_links uchun: agar lokal manbada kalit mavjud bo'lsa —
-        # bo'sh list bo'lsa ham lokal ustun (admin o'chirgan bo'lishi mumkin)
-        if key in local:
-            return local.get(key, default)
+        if key in local and local.get(key):
+            return local.get(key)
         if key in blob and blob.get(key):
             return blob.get(key)
         return default
 
-    def pick_list(key):
-        """Ro'yxatlar uchun: lokal mavjud bo'lsa — lokal (bo'sh bo'lsa ham) ustun."""
-        if key in local:
-            return local.get(key) or []
-        if key in blob:
-            return blob.get(key) or []
-        return []
-
     return {
         "movies":           merged_movies,
         "users":            merged_users,
-        "channels":         pick_list("channels"),
-        "simple_links":     pick_list("simple_links"),
+        "channels":         pick("channels", []),
+        "simple_links":     pick("simple_links", []),
         "card_number":      pick("card_number", ""),
         "pending_payments": pick("pending_payments", {}),
         "settings":         pick("settings", {
@@ -927,7 +906,7 @@ def db_initial_load():
 #          BIR MARTA, hammasi tugagandan keyin yoziladi.
 # ──────────────────────────────────────────────────────────
 
-JSONBLOB_DEBOUNCE = 8.0   # soniya — qism yuborish tugagandan keyin
+JSONBLOB_DEBOUNCE = 12.0   # soniya — qism yuborish tugagandan keyin
 
 _jsonblob_timer_task = None     # asyncio.Task — kutilayotgan saqlash
 _jsonblob_save_lock = None      # asyncio.Lock — _setup da yaratiladi
@@ -1141,7 +1120,7 @@ def _gsheet_append_row(row_data: list) -> bool:
             url += f"&key={GSHEET_API}"
         body = {"values": [row_data]}
         r = requests.post(url, headers={"Content-Type": "application/json"},
-                          data=json.dumps(body), timeout=5)
+                          data=json.dumps(body), timeout=10)
         return r.status_code in (200, 201)
     except Exception as e:
         logger.warning(f"GSheet xato: {e}")
@@ -1182,10 +1161,6 @@ def register_user(user):
 _sub_cache: dict[int, tuple[float, list]] = {}
 SUB_CACHE_TTL = 120  # 10 dan 120 ga oshirildi — tezroq javob
 
-# "Majburiy kanal" xabari spam oldini olish — {uid: last_sent_timestamp}
-_sub_msg_sent: dict[int, float] = {}
-SUB_MSG_COOLDOWN = 30  # 30 soniyada faqat 1 marta "Majburiy kanal" xabari
-
 def _sub_cache_get(user_id):
     e = _sub_cache.get(user_id)
     if e and (time.time() - e[0]) < SUB_CACHE_TTL:
@@ -1197,16 +1172,6 @@ def _sub_cache_set(user_id, result):
 
 def _sub_cache_invalidate(user_id):
     _sub_cache.pop(user_id, None)
-    _sub_msg_sent.pop(user_id, None)
-
-def _sub_msg_can_send(user_id: int) -> bool:
-    """True qaytarsa — xabar yuborish mumkin. False = spam, o'tkazib yuborish."""
-    now = time.time()
-    last = _sub_msg_sent.get(user_id, 0)
-    if now - last < SUB_MSG_COOLDOWN:
-        return False
-    _sub_msg_sent[user_id] = now
-    return True
 
 
 # ══════════════════════════════════════════════════════════
@@ -1231,11 +1196,10 @@ def extract_emoji_prefix(text: str) -> str:
     return match.group(1).rstrip() if match else ""
 
 def strip_emoji_prefix(text: str) -> str:
-    text = re.sub(
+    return re.sub(
         r'^(?:[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE00-\uFE0F\u200d\ufe0f]+\s*)+',
         '', text
     ).strip()
-    return from_bold(text)
 
 def extract_custom_emoji_id(message) -> str | None:
     if not message or not message.entities:
@@ -1837,44 +1801,22 @@ async def check_subscription(user_id, bot) -> list:
         return []
 
     async def check_one(ch):
-        # So'rovli kanallar (join_request=True) — bot a'zolikni to'g'ridan-to'g'ri tekshira olmaydi
-        # Chunki bu private/so'rovli kanallar. Shuning uchun ularni har doim talab qilamiz
-        # (join_request_handler tasdiqlangandan keyin _sub_cache_invalidate chaqiriladi)
-        if ch.get("join_request"):
-            # Bot a'zolikni tekshirishga urinish (agar kanal public bo'lsa)
-            chat_ref = _channel_ref(ch)
-            if chat_ref:
-                try:
-                    member = await bot.get_chat_member(chat_ref, user_id)
-                    status = getattr(member, "status", "")
-                    is_member = getattr(member, "is_member", None)
-                    if status in ("creator", "administrator", "member") or is_member is True:
-                        return None  # Obunachi — o'tkazamiz
-                except Exception:
-                    pass  # Tekshirib bo'lmadi — talab qilamiz
-            return ch  # So'rovli kanal — talab qilamiz
-
-        # Oddiy majburiy kanal — a'zolikni tekshiramiz
         try:
             chat_ref = _channel_ref(ch)
             if not chat_ref:
-                return None  # Kanal ma'lumoti noto'g'ri — o'tkazamiz
+                return None
             member = await bot.get_chat_member(chat_ref, user_id)
             status = getattr(member, "status", "")
             is_member = getattr(member, "is_member", None)
             # creator, administrator, member — o'tkazamiz
             if status in ("creator", "administrator", "member") or is_member is True:
                 return None
-            return ch  # Obunachi emas — talab qilamiz
-        except Exception as e:
-            err_str = str(e).lower()
-            # Bot kanalda admin emas yoki kanal topilmadi — o'tkazamiz (botga aloqador xato)
-            if "chat not found" in err_str or "bot is not a member" in err_str or "forbidden" in err_str:
-                logger.warning(f"Sub check skip (bot xatosi) {ch.get('username','?')}: {e}")
-                return None
-            # Boshqa xatolar (network, timeout) — kanal talab qilinadi (xavfsizroq)
-            logger.warning(f"Sub check error {ch.get('username','?')}: {e}")
+            # So'rovli kanal: "restricted" yoki "left" bo'lsa ham
+            # so'rov yuborilgan bo'lishi mumkin — bu holatda ham talab qilamiz
             return ch
+        except Exception as e:
+            logger.warning(f"Sub check {ch.get('username','?')}: {e}")
+            return None
 
     results = await asyncio.gather(*[check_one(ch) for ch in channels], return_exceptions=True)
     not_subbed = [r for r in results if r is not None and not isinstance(r, Exception)]
@@ -2721,21 +2663,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ns   = await check_subscription(user.id, context.bot)
         if ns:
             context.user_data["pending_code"] = code
-            if _sub_msg_can_send(user.id):
-                await sm(context.bot, user.id,
-                    "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
-                    subscription_kb(ns, simple_links=RAM.simple_links))
+            await sm(context.bot, user.id,
+                "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                subscription_kb(ns, simple_links=RAM.simple_links))
             return
         await send_movie_menu(update, context, code)
         return
 
     ns = await check_subscription(user.id, context.bot)
     if ns:
-        if _sub_msg_can_send(user.id):
-            await sm(context.bot, user.id,
-                "⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling 👇\n"
-                "Obuna bo'lgach <b>Tekshirish</b> tugmasini bosing.",
-                subscription_kb(ns, simple_links=RAM.simple_links))
+        await sm(context.bot, user.id,
+            "⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling 👇\n"
+            "Obuna bo'lgach <b>Tekshirish</b> tugmasini bosing.",
+            subscription_kb(ns, simple_links=RAM.simple_links))
         return
 
     # ── Admin tomonidan o'rnatilgan custom start xabari (rasm + matn + premium emoji) ──
@@ -3567,7 +3507,6 @@ async def cb_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     parts = q.data.split("|")
     if len(parts) != 3: return
     _, code, page_str = parts
@@ -3583,27 +3522,10 @@ async def cb_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"📺 Qismlar soni: <b>{len(eps)} ta</b>  "
                    f"({page + 1}/{total_pages} sahifa)\n\n"
                    f"👇 Qaysi qismni ko'rmoqchisiz?")
-    msg = q.message
-
-    # Xabar turi bo'yicha to'g'ri usulni tanlaymiz
-    has_caption = bool(getattr(msg, "caption", None) or getattr(msg, "photo", None)
-                       or getattr(msg, "video", None) or getattr(msg, "document", None))
-    try:
-        if has_caption:
-            await q.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=markup)
-        else:
-            await q.edit_message_text(caption, parse_mode="HTML", reply_markup=markup)
-    except Exception as e:
-        err = str(e).lower()
-        # "message is not modified" — xato emas, o'tkazib yuboramiz
-        if "not modified" in err:
-            return
-        # Boshqa xatolar — yangi xabar yuboramiz
-        logger.warning(f"cb_page edit xatosi, yangi xabar yuborilmoqda: {e}")
-        try:
-            await sm(context.bot, user_id, caption, markup)
-        except Exception as e2:
-            logger.error(f"cb_page fallback xato: {e2}")
+    try: await q.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=markup)
+    except:
+        try: await q.edit_message_text(caption, parse_mode="HTML", reply_markup=markup)
+        except Exception as e: logger.error(f"cb_page xato: {e}")
 
 
 # ══════════════════════════════════════════════════════════
@@ -4043,53 +3965,9 @@ def _get_admin_reserved_texts() -> set:
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_duplicate_update(update): return
     user = update.effective_user
-
-    # ── SUNIY ODAM (BOT) TEKSHIRUVI ──
-    if getattr(user, "is_bot", False):
-        register_user(user)  # auto-block
-        return
-
     uid  = user.id
     msg  = update.message
     text = (msg.text or "").strip()
-
-    # ── NOQONUNIY KONTENT FILTRI ──────────────────────────
-    # Bot faqat kino/drama xizmatini ko'rsatadi.
-    # Quyidagi so'zlar aniqlansa — xabar rad etiladi va admin ogohlantiriladi.
-    _BANNED_KEYWORDS = [
-        # Zo'ravonlik / tahdid
-        "qotillik", "o'ldirish", "o'ldur", "portlatish", "bomba", "qurol yasash",
-        # Narkotik
-        "giyohvand", "narkotik", "kokain", "mefedron", "nasha",
-        # Shaxsiy ma'lumot o'g'irlash
-        "parol ber", "karta raqam ber", "bank kod", "sms kod ber",
-        # Spam / reklama
-        "click here to earn", "free money", "crypto earn",
-    ]
-    text_lower = text.lower()
-    if not is_any_admin(uid):
-        for kw in _BANNED_KEYWORDS:
-            if kw in text_lower:
-                logger.warning(f"🚨 Noqonuniy kontent aniqlandi: uid={uid}, so'z='{kw}'")
-                try:
-                    await context.bot.send_message(
-                        uid,
-                        "🚫 Bu turdagi xabarlar botimizda taqiqlanган.\n"
-                        "Faqat kino/drama haqida murojaat qiling.",
-                        parse_mode="HTML"
-                    )
-                    # Admin ogohlantiriladi
-                    u_data = RAM.users.get(str(uid), {})
-                    await context.bot.send_message(
-                        ADMIN_ID,
-                        f"🚨 <b>Taqiqlangan kontent!</b>\n\n"
-                        f"👤 {u_data.get('name', '?')} (@{u_data.get('username', '')} | <code>{uid}</code>)\n"
-                        f"📝 Xabar: <code>{text[:200]}</code>",
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-                return
 
     # ── Bloklangan foydalanuvchi — hech narsa qilmaymiz ──
     if is_blocked_user(uid) and not is_any_admin(uid):
@@ -4099,97 +3977,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         return
-
-    # ══════════════════════════════════════════════════════════
-    # 🔑 ADMIN: MAJBURIY KANAL BOSHQARUVI — eng yuqorida
-    # Hech qanday flag/state bilan to'qnashmasin deb alohida
-    # ══════════════════════════════════════════════════════════
-    if is_any_admin(uid):
-        text_p = strip_emoji_prefix(text).strip().lower()
-        maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
-
-        # "Majburiy kanal" tugmasi bosildi → BARCHA holatlarni tozalab menyuni ko'rsat
-        if text_p == maj_p or from_bold(text).lower() == from_bold(bt("maj_kanal")).lower():
-            # Barcha state va flaglarni tozalaymiz
-            clear_admin_state(context)
-            context.user_data.pop("emoji_menu", None)
-            context.user_data.pop("editing_btn_key", None)
-            context.user_data.pop("bc_adding_btn", None)
-            context.user_data.pop("bc_msg", None)
-            context.user_data.pop("reply_to", None)
-            context.user_data.pop("awaiting_help", None)
-            context.user_data["channel_manage_menu"] = True
-            await sm(context.bot, uid,
-                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
-                channel_manage_kb())
-            return
-
-        # Kanal menyu ochiq — tugmalarni shu yerda qabul qilamiz
-        if context.user_data.get("channel_manage_menu"):
-            ch_states = ("add_channel_username", "add_channel_title", "add_channel_url",
-                         "add_simple_link_title", "add_simple_link_url",
-                         "add_soruvli_kanal", "add_soruvli_kanal_title")
-            if context.user_data.get("admin_state") in ch_states:
-                handled = await admin_state_handler(update, context, text)
-                if handled: return
-
-            logger.info(f"[KANAL MENU] uid={uid} plain='{text_p}'")
-
-            # Orqaga
-            back_keys = ["admin_panel", "orqaga", "boshqarish", "asosiy"]
-            if any(text_p == strip_emoji_prefix(bt(k)).strip().lower() for k in back_keys):
-                clear_admin_state(context)
-                await sm(context.bot, uid, "Admin panel", admin_menu_kb(uid))
-                return
-
-            # Kanal qo'shish
-            if text_p == strip_emoji_prefix(bt("kanal_qosh")).strip().lower():
-                context.user_data["admin_state"] = "add_channel_username"
-                await sm(context.bot, uid,
-                    "➕ <b>Kanal qo'shish</b>\n\nKanal <b>username</b>ini kiriting:\n"
-                    "<i>Misol: @mykinochannel yoki https://t.me/mykinochannel</i>")
-                return
-
-            # Kanal o'chirish
-            if text_p == strip_emoji_prefix(bt("kanal_uch")).strip().lower():
-                channels = RAM.channels
-                simple   = RAM.simple_links or []
-                if not channels and not simple:
-                    await sm(context.bot, uid, "❌ Hozircha kanal yo'q.", channel_manage_kb())
-                    return
-                await sm(context.bot, uid,
-                    f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan elementni tanlang 👇",
-                    channel_delete_inline_kb(channels, simple))
-                return
-
-            # Kanal ro'yxati
-            if text_p == strip_emoji_prefix(bt("kanal_royxat")).strip().lower():
-                await sm(context.bot, uid, _channels_list_text(), channel_manage_kb())
-                return
-
-            # Oddiy havola
-            if text_p == strip_emoji_prefix(bt("oddiy_havola")).strip().lower():
-                context.user_data["admin_state"] = "add_simple_link_title"
-                await sm(context.bot, uid,
-                    "🔗 <b>Oddiy havola qo'shish</b>\n\n"
-                    "Havola nomini kiriting (masalan: <code>Kino kanali</code>):")
-                return
-
-            # So'rovli kanal
-            if text_p == strip_emoji_prefix(bt("soruvli_kanal")).strip().lower():
-                context.user_data["admin_state"] = "add_soruvli_kanal"
-                await sm(context.bot, uid,
-                    "📨 <b>So'rovli kanal qo'shish</b>\n\n"
-                    "Kanal username yoki invite linkini kiriting:\n"
-                    "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
-                return
-
-            # Hech biri mos kelmasa — qayta menyu
-            logger.warning(f"[KANAL MENU] mos yo'q: '{text_p}'")
-            await sm(context.bot, uid,
-                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
-                channel_manage_kb())
-            return
 
     # ── 0. Hisobni to'ldirish — miqdor kiritish (ADMIN STATE DAN OLDIN) ──
     if context.user_data.get("admin_state") == "topup_amount":
@@ -4221,18 +4008,30 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _amt:
                     busy_amounts.add(int(_amt))
 
-        # Agar konflikt bo'lsa — foydalanuvchidan boshqa miqdor kiritishini so'raymiz
-        if amount in busy_amounts:
-            context.user_data["admin_state"] = "topup_amount"
-            await sm(context.bot, uid,
-                f"⚠️ <b>Bu miqdor hozir band!</b>\n\n"
-                f"Ayni paytda boshqa foydalanuvchi <b>{amount:,} so'm</b> to'lov qilmoqda.\n\n"
-                f"To'lovlar aralashib ketmasligi uchun <b>boshqa miqdor</b> kiriting:\n"
-                f"<i>(masalan: {amount + 500:,} yoki {amount + 1000:,} so'm)</i>")
-            return
-
+        # Agar konflikt bo'lsa — noyob miqdor topamiz
         conflict_amount = None
         final_amount = amount
+        if amount in busy_amounts:
+            conflict_amount = amount
+            candidate = amount + 1
+            while candidate in busy_amounts:
+                candidate += 1
+                if candidate > amount + 200:
+                    # 200 dan oshib ketsa — katta offset qo'shamiz
+                    import random as _random
+                    candidate = amount + _random.randint(201, 500)
+                    break
+            final_amount = candidate
+
+        # Foydalanuvchini xabardor qilish — agar miqdor o'zgartirildisa
+        if conflict_amount is not None:
+            await sm(context.bot, uid,
+                f"⚠️ <b>Diqqat! Miqdor o'zgartirildi.</b>\n\n"
+                f"Ayni paytda boshqa foydalanuvchi tomonidan "
+                f"<b>{conflict_amount:,} so'm</b> to'lov qilinmoqda.\n\n"
+                f"To'lovlar aralashib ketmasligi uchun siz aynan:\n\n"
+                f"💵 <b>{final_amount:,} so'm</b> to'lang!\n\n"
+                f"<i>Miqdor avtomatik tanlandi — o'zgartirmang.</i>")
         # ══════════════════════════════════════════════════════
 
         # Foydalanuvchining o'zining eski pending to'lovini bekor qilamiz
@@ -4298,7 +4097,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         card_line = f"<blockquote>💳 <b>To'lov uchun karta:</b> <code>{card}</code></blockquote>\n" if card and card != "Karta raqami o'rnatilmagan" else ""
 
-        amount_line = f"💵 Miqdor: <b>{final_amount:,} so'm</b>\n"
+        # Agar miqdor o'zgartirildisa — alohida ogohlantirish
+        if conflict_amount is not None:
+            amount_line = (
+                f"💵 To'lanadigan miqdor: <b>{final_amount:,} so'm</b>\n"
+                f"<i>(Siz {amount:,} so'm kiritgandingiz, lekin boshqa foydalanuvchi "
+                f"bilan to'qnashuv bo'lgani uchun {final_amount:,} so'm belgilandi)</i>\n"
+            )
+        else:
+            amount_line = f"💵 Miqdor: <b>{final_amount:,} so'm</b>\n"
 
         sent_msg = await sm(context.bot, uid,
             f"✅ <b>To'lov yaratildi!</b>\n\n"
@@ -4325,18 +4132,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── 1. editing_btn_key ─────────────────────────────
     if is_any_admin(uid) and context.user_data.get("editing_btn_key"):
-        # maj_kanal tugmasi har qanday holatda ham ishlashi kerak
-        _ek_text_p = strip_emoji_prefix(text).strip().lower()
-        _ek_maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
-        if _ek_text_p == _ek_maj_p:
-            context.user_data.pop("editing_btn_key", None)
-            context.user_data.pop("emoji_menu", None)
-            clear_admin_state(context)
-            context.user_data["channel_manage_menu"] = True
-            await sm(context.bot, uid,
-                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
-                channel_manage_kb())
-            return
         key = context.user_data.pop("editing_btn_key")
         if not text:
             context.user_data["editing_btn_key"] = key
@@ -4410,18 +4205,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── 3. Emoji menyu ──────────────────────────────────
     if is_any_admin(uid) and context.user_data.get("emoji_menu"):
-        # maj_kanal tugmasi emoji menyusida ham ishlashi kerak
-        _em_text_p = strip_emoji_prefix(text).strip().lower()
-        _em_maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
-        if _em_text_p == _em_maj_p:
-            context.user_data.pop("emoji_menu", None)
-            context.user_data.pop("editing_btn_key", None)
-            clear_admin_state(context)
-            context.user_data["channel_manage_menu"] = True
-            await sm(context.bot, uid,
-                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
-                channel_manage_kb())
-            return
         if text == bt("orqaga") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("orqaga")):
             context.user_data.pop("emoji_menu", None)
             context.user_data.pop("editing_btn_key", None)
@@ -4453,41 +4236,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 4. Kanal boshqarish ─────────────────────────────
     if is_any_admin(uid) and context.user_data.get("channel_manage_menu"):
         ch_states = ("add_channel_username", "add_channel_title", "add_channel_url", "add_channel",
-                     "add_simple_link_title", "add_simple_link_url", "add_soruvli_kanal",
-                     "add_soruvli_kanal_title")
+                     "add_simple_link_title", "add_simple_link_url")
         if context.user_data.get("admin_state") in ch_states:
             handled = await admin_state_handler(update, context, text)
             if handled: return
-
-        text_plain = strip_emoji_prefix(text).strip().lower()
-        logger.info(f"[KANAL MENU] uid={uid} raw='{text}' plain='{text_plain}'")
-
-        def _plain(key):
-            return strip_emoji_prefix(bt(key)).strip().lower()
-
-        def _ch_match(key):
-            v = bt(key)
-            v_low = v.lower() if v else ""
-            p = _plain(key)
-            # To'liq moslik, plain moslik, yoki ichida bor
-            return (text.lower() == v_low or text_plain == p
-                    or (p and text_plain and (p in text_plain or text_plain in p)))
-
-        # Orqaga / Admin panel
-        if _ch_match("admin_panel") or _ch_match("orqaga") or _ch_match("boshqarish"):
+        if text in (bt("admin_panel"), bt("orqaga")) or strip_emoji_prefix(text) in (
+            strip_emoji_prefix(bt("admin_panel")), strip_emoji_prefix(bt("orqaga"))
+        ):
             context.user_data.pop("channel_manage_menu", None)
             context.user_data.pop("admin_state", None)
             await sm(context.bot, uid, "Admin panel", admin_menu_kb(uid))
             return
-
-        if _ch_match("kanal_qosh"):
+        if text == bt("kanal_qosh") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_qosh")):
             context.user_data["admin_state"] = "add_channel_username"
             await sm(context.bot, uid,
                 "➕ <b>Kanal qo'shish</b>\n\nKanal <b>username</b>ini kiriting:\n"
                 "<i>Misol: @mykinochannel yoki https://t.me/mykinochannel</i>")
             return
-
-        if _ch_match("kanal_uch"):
+        if text == bt("kanal_uch") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_uch")):
             channels = RAM.channels
             simple   = RAM.simple_links or []
             if not channels and not simple:
@@ -4497,20 +4263,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan elementni tanlang 👇",
                 channel_delete_inline_kb(channels, simple))
             return
-
-        if _ch_match("kanal_royxat"):
+        if text == bt("kanal_royxat") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_royxat")):
             await sm(context.bot, uid, _channels_list_text(), channel_manage_kb())
             return
-
-        if _ch_match("oddiy_havola"):
+        if text == bt("oddiy_havola") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("oddiy_havola")):
             context.user_data["admin_state"] = "add_simple_link_title"
             await sm(context.bot, uid,
                 "🔗 <b>Oddiy havola qo'shish</b>\n\n"
                 "Bu havola foydalanuvchilarga ko'rsatiladi, lekin bot obunani <b>tekshirmaydi</b>.\n\n"
                 "Havola nomini kiriting (masalan: <code>Kino kanali</code>):")
             return
-
-        if _ch_match("soruvli_kanal"):
+        if text == bt("soruvli_kanal") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("soruvli_kanal")):
             context.user_data["admin_state"] = "add_soruvli_kanal"
             await sm(context.bot, uid,
                 "📨 <b>So'rovli kanal qo'shish</b>\n\n"
@@ -4521,13 +4284,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Kanal username yoki invite linkini kiriting:\n"
                 "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
             return
-
-        # Mos kelmadi — logga yozib qayta menyu ko'rsatamiz
-        logger.warning(f"[KANAL MENU] mos topilmadi: '{text_plain}' | "
-                       f"kanal_qosh='{_plain('kanal_qosh')}' kanal_uch='{_plain('kanal_uch')}'")
-        await sm(context.bot, uid,
-            f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nNima qilmoqchisiz?",
-            channel_manage_kb())
         return
 
     # ── 5. Admin reply_to ───────────────────────────────
@@ -4593,7 +4349,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if key == "emoji_soz":
                 clear_admin_state(context)
                 context.user_data["emoji_menu"] = True
-                context.user_data.pop("channel_manage_menu", None)
                 await sm(context.bot, uid,
                     "<b>Tugma sozlamalari</b>\nO'zgartirmoqchi bo'lgan tugmani pastdan tanlang 👇",
                     emoji_menu_kb())
@@ -4628,9 +4383,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             context.user_data.pop("emoji_menu", None)
             context.user_data.pop("editing_btn_key", None)
-            # maj_kanal emas bo'lsa — channel_manage_menu ni tozalaymiz
-            if key != "maj_kanal":
-                context.user_data.pop("channel_manage_menu", None)
             await admin_buttons(update, context, bt(key))
             return
 
@@ -4729,10 +4481,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ns = await check_subscription(uid, context.bot)
         if ns:
             context.user_data["pending_code"] = code
-            if _sub_msg_can_send(uid):
-                await sm(context.bot, uid,
-                    "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
-                    subscription_kb(ns, simple_links=RAM.simple_links))
+            await sm(context.bot, uid,
+                "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                subscription_kb(ns, simple_links=RAM.simple_links))
             return
         await send_movie_menu(update, context, code)
     elif matches:
@@ -4942,8 +4693,6 @@ async def admin_buttons(update, context, text: str):
 
     if _btn_match("maj_kanal"):
         context.user_data.pop("admin_state", None)
-        context.user_data.pop("emoji_menu", None)        # ← emoji_menu tozalaymiz
-        context.user_data.pop("editing_btn_key", None)   # ← editing state ham
         context.user_data["channel_manage_menu"] = True
         await sm(context.bot, uid,
             f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nNima qilmoqchisiz?",
@@ -7035,11 +6784,10 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .read_timeout(10)
-        .write_timeout(15)
-        .connect_timeout(8)
-        .pool_timeout(10)
-        .concurrent_updates(True)   # Parallel update ishlash — tezroq javob
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(15)
+        .pool_timeout(30)
         .build()
     )
 
@@ -7121,17 +6869,14 @@ def main():
             logger.warning(f"Startup notify xato: {e}")
 
     if app.job_queue:
-        app.job_queue.run_once(_startup_notify, when=3)
-        app.job_queue.run_repeating(_periodic_sync, interval=300, first=90)
-        logger.info("🔄 Periodik sync yoqildi (har 5 daqiqada)")
+        app.job_queue.run_once(_startup_notify, when=5)
+        app.job_queue.run_repeating(_periodic_sync, interval=120, first=60)
+        logger.info("🔄 Periodik sync yoqildi (har 2 daqiqada)")
 
     logger.info(f"🚀 Bot v20 Railway ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=["message", "callback_query", "chat_join_request"],
-        poll_interval=0.5,      # Default 0.0 — CPU band, 0.5 optimal
-        timeout=10,             # Long-polling timeout (default 0)
-    )
+    app.run_polling(drop_pending_updates=True, allowed_updates=[
+        "message", "callback_query", "chat_join_request"
+    ])
 
 
 if __name__ == "__main__":
