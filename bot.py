@@ -4088,6 +4088,90 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ══════════════════════════════════════════════════════════
+    # 🔑 ADMIN: MAJBURIY KANAL BOSHQARUVI — eng yuqorida
+    # Hech qanday flag/state bilan to'qnashmasin deb alohida
+    # ══════════════════════════════════════════════════════════
+    if is_any_admin(uid):
+        text_p = strip_emoji_prefix(text).strip().lower()
+        maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
+
+        # "Majburiy kanal" tugmasi bosildi → menyuni ko'rsat
+        if text_p == maj_p or text.lower() == bt("maj_kanal").lower():
+            clear_admin_state(context)
+            context.user_data["channel_manage_menu"] = True
+            await sm(context.bot, uid,
+                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
+                channel_manage_kb())
+            return
+
+        # Kanal menyu ochiq — tugmalarni shu yerda qabul qilamiz
+        if context.user_data.get("channel_manage_menu"):
+            ch_states = ("add_channel_username", "add_channel_title", "add_channel_url",
+                         "add_simple_link_title", "add_simple_link_url",
+                         "add_soruvli_kanal", "add_soruvli_kanal_title")
+            if context.user_data.get("admin_state") in ch_states:
+                handled = await admin_state_handler(update, context, text)
+                if handled: return
+
+            logger.info(f"[KANAL MENU] uid={uid} plain='{text_p}'")
+
+            # Orqaga
+            back_keys = ["admin_panel", "orqaga", "boshqarish", "asosiy"]
+            if any(text_p == strip_emoji_prefix(bt(k)).strip().lower() for k in back_keys):
+                clear_admin_state(context)
+                await sm(context.bot, uid, "Admin panel", admin_menu_kb(uid))
+                return
+
+            # Kanal qo'shish
+            if text_p == strip_emoji_prefix(bt("kanal_qosh")).strip().lower():
+                context.user_data["admin_state"] = "add_channel_username"
+                await sm(context.bot, uid,
+                    "➕ <b>Kanal qo'shish</b>\n\nKanal <b>username</b>ini kiriting:\n"
+                    "<i>Misol: @mykinochannel yoki https://t.me/mykinochannel</i>")
+                return
+
+            # Kanal o'chirish
+            if text_p == strip_emoji_prefix(bt("kanal_uch")).strip().lower():
+                channels = RAM.channels
+                simple   = RAM.simple_links or []
+                if not channels and not simple:
+                    await sm(context.bot, uid, "❌ Hozircha kanal yo'q.", channel_manage_kb())
+                    return
+                await sm(context.bot, uid,
+                    f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan elementni tanlang 👇",
+                    channel_delete_inline_kb(channels, simple))
+                return
+
+            # Kanal ro'yxati
+            if text_p == strip_emoji_prefix(bt("kanal_royxat")).strip().lower():
+                await sm(context.bot, uid, _channels_list_text(), channel_manage_kb())
+                return
+
+            # Oddiy havola
+            if text_p == strip_emoji_prefix(bt("oddiy_havola")).strip().lower():
+                context.user_data["admin_state"] = "add_simple_link_title"
+                await sm(context.bot, uid,
+                    "🔗 <b>Oddiy havola qo'shish</b>\n\n"
+                    "Havola nomini kiriting (masalan: <code>Kino kanali</code>):")
+                return
+
+            # So'rovli kanal
+            if text_p == strip_emoji_prefix(bt("soruvli_kanal")).strip().lower():
+                context.user_data["admin_state"] = "add_soruvli_kanal"
+                await sm(context.bot, uid,
+                    "📨 <b>So'rovli kanal qo'shish</b>\n\n"
+                    "Kanal username yoki invite linkini kiriting:\n"
+                    "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
+                return
+
+            # Hech biri mos kelmasa — qayta menyu
+            logger.warning(f"[KANAL MENU] mos yo'q: '{text_p}'")
+            await sm(context.bot, uid,
+                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
+                channel_manage_kb())
+            return
+
     # ── 0. Hisobni to'ldirish — miqdor kiritish (ADMIN STATE DAN OLDIN) ──
     if context.user_data.get("admin_state") == "topup_amount":
         if not text.strip().isdigit() or int(text.strip()) <= 0:
