@@ -29,7 +29,7 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8920261423:AAF3Ej38ppsWnLLYdo2aGi0Z32Rjblc-V1M"
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAE4V0HrEDiX8stiXAZbHaS6XlSyYPwht3k"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
@@ -42,7 +42,7 @@ CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "DSSD85MU60"
 CHECKCARD_BASE_URL = "https://checkcard.uz/api"
 
 # ─── RAILWAY / WEBHOOK KONFIGURATSIYASI ─────────────────────
-RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://uzmediya-production.up.railway.app"
+RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://kino-bot-mukammal-production.up.railway.app"
 CHECKCARD_WEBHOOK_PATH = "/checkcard_webhook"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
