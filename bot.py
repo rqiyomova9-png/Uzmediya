@@ -34,7 +34,7 @@ ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
 
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
 JSONBLOB_URL      = ""   # O'chirildi — PostgreSQL ishlatilmoqda
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Lodn9MTb7nysq5l80cQVCu9IKfgQRlnNe654PT0hKQs"
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or "8920261423:AAHTMEqpndtK0u2zwv4pWwe1QWyIUYXX8V8"
 
 # ─── CHECKCARD API KONFIGURATSIYASI ─────────────────────────
 CHECKCARD_SHOP_ID  = os.environ.get("CHECKCARD_SHOP_ID")  or "249444"
