@@ -3,7 +3,7 @@
 Kino Bot - v22 (PostgreSQL + TO'LOVLAR RASM PANEL)
 """
 
-import logging, asyncio, json, time, re, os, threading, copy, subprocess, tempfile
+import logging, asyncio, json, time, re, os, threading, copy
 from datetime import datetime
 from io import BytesIO
 import requests
@@ -29,8 +29,8 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8920261423:AAF3Ej38ppsWnLLYdo2aGi0Z32Rjblc-V1M"
-ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAE4V0HrEDiX8stiXAZbHaS6XlSyYPwht3k"
+ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
 JSONBLOB_URL      = ""   # O'chirildi — PostgreSQL ishlatilmoqda
@@ -42,7 +42,7 @@ CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "DSSD85MU60"
 CHECKCARD_BASE_URL = "https://checkcard.uz/api"
 
 # ─── RAILWAY / WEBHOOK KONFIGURATSIYASI ─────────────────────
-RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://dramlaruz-production.up.railway.app/checkcard_webhook"
+RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://kino-bot-mukammal-production.up.railway.app"
 CHECKCARD_WEBHOOK_PATH = "/checkcard_webhook"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
@@ -82,7 +82,6 @@ class RamCache:
         self.emoji_ids: dict = {}
         self.sub_admins: dict = {}   # {uid_str: {"perms": {key: bool}}}
         self.blocked_users: dict = {}  # {uid_str: {"blocked_at": timestamp, "by": admin_uid}}
-        self.premium_plans: list = []  # [{id, name, days, price, description}]
         self.loaded: bool   = False  # bazadan yuklandi?
 
     # ── Barcha ma'lumotlarni dict ga ──────────────────────
@@ -101,7 +100,6 @@ class RamCache:
                 "emoji_ids":        copy.deepcopy(self.emoji_ids),
                 "sub_admins":       copy.deepcopy(self.sub_admins),
                 "blocked_users":    copy.deepcopy(self.blocked_users),
-                "premium_plans":    copy.deepcopy(self.premium_plans),
             }
 
     # ── Dict dan yuklash ──────────────────────────────────
@@ -132,7 +130,6 @@ class RamCache:
             self.emoji_ids        = data.get("emoji_ids", {}) or {}
             self.sub_admins       = data.get("sub_admins", {}) or {}
             self.blocked_users    = data.get("blocked_users", {}) or {}
-            self.premium_plans    = data.get("premium_plans", []) or []
             self.loaded           = True
 
     # ── Kino operatsiyalari ───────────────────────────────
@@ -203,7 +200,7 @@ def checkcard_create_payment(amount: int, order_id: str = None) -> dict:
                f"&shop_key={CHECKCARD_SHOP_KEY}"
                f"&amount={amount}"
                f"&order={order_id}")
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=8)
         logger.info(f"CheckCard create javob: {r.text[:300]}")
         return r.json()
     except Exception as e:
@@ -216,7 +213,7 @@ def checkcard_check_payment(order: str) -> dict:
     try:
         url = (f"{CHECKCARD_BASE_URL}?method=check"
                f"&order={order}")
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=8)
         logger.info(f"CheckCard check javob: {r.text[:200]}")
         return r.json()
     except Exception as e:
@@ -356,7 +353,7 @@ def episode_expires_in(user_id, code, ep) -> int:
 # ── Admin huquqlari ─────────────────────────────────────────
 ADMIN_PERM_KEYS = [
     "kino_joy", "qism_qosh", "pullik", "stat", "kanal_post",
-    "maj_kanal", "karta", "emoji_soz", "kino_kanal_set",
+    "maj_kanal", "karta", "ilova", "emoji_soz", "kino_kanal_set",
     "qism_tahrir", "kino_uch", "broadcast",
     "premium_ber", "start_xab", "qism_och", "foydalanuvchi_blok",
 ]
@@ -397,138 +394,6 @@ def _is_duplicate_update(update) -> bool:
             _SEEN_UPDATE_IDS.discard(x)
     return False
 
-
-# ══════════════════════════════════════════════════════════
-# 🛡 ANTI-SPAM TIZIMI — Telegram shikoyatidan himoya
-# ══════════════════════════════════════════════════════════
-#
-# Telegram botni nima uchun o'chiradi:
-#   1. Ko'p foydalanuvchi "Block and report spam" bosadi
-#   2. Bot bir foydalanuvchiga juda ko'p xabar yuboradi (flood)
-#   3. Bir foydalanuvchi botga juda tez-tez xabar yuboradi
-#
-# Bu tizim uchala muammoni hal qiladi.
-
-# Har bir foydalanuvchi uchun: {uid: [timestamp, timestamp, ...]}
-_SPAM_TRACKER: dict[int, list] = {}
-# Ogohlantirish soni: {uid: count}
-_SPAM_WARN_COUNT: dict[int, int] = {}
-# So'nggi ogohlantirish vaqti: {uid: timestamp}
-_SPAM_LAST_WARN: dict[int, float] = {}
-# Bot tomonidan yuborilgan xabarlar soni (flood oldini olish): {uid: [ts,...]}
-_BOT_MSG_TRACKER: dict[int, list] = {}
-
-# ── Sozlamalar ──────────────────────────────────────────
-SPAM_WINDOW       = 10    # soniya ichida
-SPAM_MAX_MSGS     = 8     # 10 soniyada 8 xabardan ko'p = spam
-SPAM_WARN_LIMIT   = 3     # 3 marta ogohlantirish = avtoblok
-SPAM_MUTE_TIME    = 60    # ogohlantirishdan keyin 60 soniya jim turadi
-BOT_FLOOD_WINDOW  = 5     # 5 soniyada botdan nechta xabar
-BOT_FLOOD_MAX     = 3     # botdan 5 soniyada 3 tadan ko'p xabar = kamaytir
-
-_spam_lock = threading.Lock()
-
-
-def _anti_spam_check(uid: int) -> tuple[bool, str]:
-    """
-    True, "reason" — spam aniqlandi, xabarni qaytarish kerak
-    False, ""       — normal, xabarni qayta ishlash mumkin
-    """
-    now = time.time()
-    with _spam_lock:
-        # Tracker tozalash (eski vaqtlarni o'chirish)
-        times = _SPAM_TRACKER.get(uid, [])
-        times = [t for t in times if now - t < SPAM_WINDOW]
-        times.append(now)
-        _SPAM_TRACKER[uid] = times
-
-        # Mute tekshiruvi — hozir jim turish vaqtidami?
-        last_warn = _SPAM_LAST_WARN.get(uid, 0)
-        if now - last_warn < SPAM_MUTE_TIME:
-            return True, "muted"
-
-        # Spam chegara
-        if len(times) > SPAM_MAX_MSGS:
-            warn_count = _SPAM_WARN_COUNT.get(uid, 0) + 1
-            _SPAM_WARN_COUNT[uid] = warn_count
-            _SPAM_LAST_WARN[uid]  = now
-            _SPAM_TRACKER[uid]    = []  # counter reset
-
-            if warn_count >= SPAM_WARN_LIMIT:
-                return True, "autoblock"
-            return True, f"warn:{warn_count}"
-
-    return False, ""
-
-
-def _bot_flood_ok(uid: int) -> bool:
-    """Bot bu foydalanuvchiga juda ko'p xabar yuborayotgan bo'lsa — False qaytaradi."""
-    now = time.time()
-    with _spam_lock:
-        times = _BOT_MSG_TRACKER.get(uid, [])
-        times = [t for t in times if now - t < BOT_FLOOD_WINDOW]
-        times.append(now)
-        _BOT_MSG_TRACKER[uid] = times
-        return len(times) <= BOT_FLOOD_MAX
-
-
-async def _apply_spam_action(bot, uid: int, reason: str) -> bool:
-    """
-    Spam harakat bajaradi. True qaytarsa — xabarni to'xtatish kerak.
-    """
-    if reason == "muted":
-        # Jim — hech narsa yubormaymiz (xabarni shunchaki o'tkazib yuboramiz)
-        return True
-
-    if reason == "autoblock":
-        # Avtomatik bloklash
-        uid_str = str(uid)
-        if uid_str not in RAM.blocked_users:
-            RAM.blocked_users[uid_str] = {
-                "blocked_at": time.time(),
-                "by": ADMIN_ID,
-                "reason": "anti_spam_autoblock",
-            }
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(schedule_save())
-            except RuntimeError:
-                pass
-            logger.warning(f"🛡 Anti-spam: {uid} avtoblok qilindi (spam)")
-            # Adminga xabar
-            try:
-                u_data = RAM.users.get(uid_str, {})
-                name   = u_data.get("name") or f"ID:{uid}"
-                uname  = u_data.get("username") or ""
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"🛡 <b>Anti-spam avtoblok!</b>\n\n"
-                    f"👤 {name} (@{uname} | <code>{uid}</code>)\n"
-                    f"⚡ Sabab: juda ko'p xabar yubordi",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-        return True
-
-    if reason.startswith("warn:"):
-        warn_n = reason.split(":")[1]
-        qolgan = SPAM_WARN_LIMIT - int(warn_n)
-        # Ogohlantirish — faqat bitta xabar
-        try:
-            await bot.send_message(
-                uid,
-                f"⚠️ Juda tez xabar yuboryapsiz!\n"
-                f"Iltimos, biroz kuting.\n"
-                f"({qolgan} marta yana takrorlasangiz — <b>bloklansiz</b>)",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-        return True
-
-    return False
-
 # ══════════════════════════════════════════════════════════
 # STORAGE STATUS
 # ══════════════════════════════════════════════════════════
@@ -544,23 +409,20 @@ DB_STATUS = {
 
 EMOJI_IDS: dict = {}  # RAM.emoji_ids bilan sinxron
 
-# ─── POST EMOJI DEFAULT QIYMATLAR ─────────────────────────
-POST_EMOJI_DEFAULTS = {
-    "post_nomi":   "🎭",
-    "post_qism":   "🎞",
-    "post_kod":    "🔑",
-    "post_janr":   "🎬",
-    "post_tili":   "🌐",
-    "post_bot":    "🤖",
-    "post_korish": "👁",
-}
+# Global bot username cache — har safar API ga so'rov yubormaslik uchun
+_BOT_USERNAME_CACHE: str = ""
 
-# Tugmalar uchun default emoji (faqat EMOJI_IDS bo'sh bo'lganda)
-BTN_EMOJI_DEFAULTS = {
-    "tomosha": "▶️",
-}
+async def _get_bot_username(bot) -> str:
+    """Bot username ni bir marta oladi va cache ga saqlaydi."""
+    global _BOT_USERNAME_CACHE
+    if _BOT_USERNAME_CACHE:
+        return _BOT_USERNAME_CACHE
+    me = await bot.get_me()
+    _BOT_USERNAME_CACHE = me.username or ""
+    return _BOT_USERNAME_CACHE
 
-# ─── UNICODE QALIN ─────────────────────────────────────────
+
+
 def to_bold(text: str) -> str:
     result = []
     for ch in text:
@@ -585,6 +447,7 @@ DEFAULT_BTN = {
     "kanal_post":     _B('Kanalga post'),
     "maj_kanal":      _B('Majburiy kanal'),
     "karta":          _B('Karta raqami'),
+    "ilova":          _B('Bot qollanma video'),
     "emoji_soz":      _B('Emoji sozlamalari'),
     "asosiy":         _B('Asosiy menyu'),
     "boshqarish":     _B('Boshqarish'),
@@ -616,6 +479,7 @@ DEFAULT_BTN = {
     "kanal_royxat":   _B('Kanallar royxati'),
     "oddiy_havola":   _B("Oddiy havola qo'shish"),
     "soruvli_kanal":  _B("So'rovli kanal qo'shish"),
+    "admin_lichka_set": _B("👤 Admin lichkasini qo'shish"),
     "qism_tahrir":    _B('Qismlarni tahrirlash'),
     "admin_qosh":     _B('Admin qoshish'),
     "qism_och":       _B("Qism ochish"),
@@ -623,19 +487,10 @@ DEFAULT_BTN = {
     "start_xab":      _B('Start xabarni ozgartirish'),
     "kod_btn":        _B('Kod'),
     "kanal_btn":      _B('Kanal'),
-    "balans":         _B('Balans'),
+    "balans":         _B('💰 Balans'),
     "hisob_toldirish": _B('💳 Hisobni to\'ldirish'),
     "foydalanuvchi_blok": _B('🚫 Foydalanuvchi bloklash'),
     "tolovlar":           _B("💸 Foydalanuvchi to'lovlari"),
-    "admin_panel":        _B("Admin panel"),
-    "premium_plan_manage": _B("💎 Pryum tariflar"),
-    "post_nomi":          "🎭",
-    "post_qism":          "🎞",
-    "post_kod":           "🔑",
-    "post_janr":          "🎬",
-    "post_tili":          "🌐",
-    "post_bot":           "🤖",
-    "post_korish":        "👁",
 }
 
 BTN_LABELS = {
@@ -651,6 +506,7 @@ BTN_LABELS = {
     "kanal_post":    "Kanalga post",
     "maj_kanal":     "Majburiy kanal",
     "karta":         "Karta raqami",
+    "ilova":         "Bot qo'llanma video",
     "emoji_soz":     "Emoji sozlamalari",
     "asosiy":        "Asosiy menyu",
     "boshqarish":    "⚙️ Boshqarish",
@@ -691,17 +547,7 @@ BTN_LABELS["qism_och"]    = "Qism ochish"
 BTN_LABELS["premium_ber"]  = "Premium berish"
 BTN_LABELS["start_xab"]    = "Start xabarni o'zgartirish"
 BTN_LABELS["kod_btn"]      = "Kod tugmasi"
-BTN_LABELS["balans"]       = "Balans tugmasi"
-BTN_LABELS["post_nomi"]    = "Post: Nomi emoji"
-BTN_LABELS["post_qism"]    = "Post: Qism emoji"
-BTN_LABELS["post_kod"]     = "Post: Kod emoji"
-BTN_LABELS["post_janr"]    = "Post: Janr emoji"
-BTN_LABELS["post_tili"]    = "Post: Tili emoji"
-BTN_LABELS["post_bot"]     = "Post: Bot emoji"
-BTN_LABELS["post_korish"]  = "Post: Ko\'rish emoji"
-BTN_LABELS["hisob_toldirish"] = "Hisobni to\'ldirish tugmasi"
 BTN_LABELS["kanal_btn"]    = "Kanal tugmasi"
-BTN_LABELS["premium_plan_manage"] = "Pryum tariflar boshqaruvi"
 LABEL_TO_KEY = {v: k for k, v in BTN_LABELS.items()}
 
 # ══════════════════════════════════════════════════════════
@@ -784,7 +630,7 @@ def _pg_init_table():
         return False
 
 
-def _save_postgres(data: dict, retries: int = 3) -> bool:
+def _save_postgres(data: dict, retries: int = 2) -> bool:
     """PostgreSQL ga saqlaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return False
@@ -816,7 +662,7 @@ def _save_postgres(data: dict, retries: int = 3) -> bool:
                 try: conn.close()
                 except: pass
         if attempt < retries - 1:
-            time.sleep(3 * (attempt + 1))
+            time.sleep(2)
     return False
 
 
@@ -824,7 +670,7 @@ def _load_postgres() -> dict | None:
     """PostgreSQL dan yuklaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return None
-    for attempt in range(6):
+    for attempt in range(3):   # 6 dan 3 ga kamaytirildi
         conn = None
         try:
             conn = _get_pg_conn()
@@ -854,9 +700,9 @@ def _load_postgres() -> dict | None:
             if conn:
                 try: conn.close()
                 except: pass
-        if attempt < 5:
-            time.sleep(2 * (attempt + 1))
-    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (6 urinish).")
+        if attempt < 2:
+            time.sleep(2)   # 2*(attempt+1) o'rniga flat 2 soniya
+    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (3 urinish).")
     return None
 
 
@@ -951,17 +797,27 @@ def _merge_db(blob: dict | None, local: dict | None) -> dict:
 
     # Boshqa maydonlar — lokal ustun, bo'lmasa blob
     def pick(key, default):
-        if key in local and local.get(key):
-            return local.get(key)
+        # channels va simple_links uchun: agar lokal manbada kalit mavjud bo'lsa —
+        # bo'sh list bo'lsa ham lokal ustun (admin o'chirgan bo'lishi mumkin)
+        if key in local:
+            return local.get(key, default)
         if key in blob and blob.get(key):
             return blob.get(key)
         return default
 
+    def pick_list(key):
+        """Ro'yxatlar uchun: lokal mavjud bo'lsa — lokal (bo'sh bo'lsa ham) ustun."""
+        if key in local:
+            return local.get(key) or []
+        if key in blob:
+            return blob.get(key) or []
+        return []
+
     return {
         "movies":           merged_movies,
         "users":            merged_users,
-        "channels":         pick("channels", []),
-        "simple_links":     pick("simple_links", []),
+        "channels":         pick_list("channels"),
+        "simple_links":     pick_list("simple_links"),
         "card_number":      pick("card_number", ""),
         "pending_payments": pick("pending_payments", {}),
         "settings":         pick("settings", {
@@ -1013,9 +869,6 @@ def db_initial_load():
         DB_STATUS["load_failed"] = False
         if has_local:
             RAM.from_dict(local)
-            for _k in list(RAM.emoji_ids.keys()):
-                if not str(RAM.emoji_ids.get(_k, "")).strip().isdigit():
-                    del RAM.emoji_ids[_k]
             EMOJI_IDS.clear()
             EMOJI_IDS.update(RAM.emoji_ids)
             logger.warning(f"⚠️ Faqat lokal yuklandi: {len(RAM.movies)} kino. "
@@ -1032,17 +885,8 @@ def db_initial_load():
 
     merged = _merge_db(blob, local)
     RAM.from_dict(merged)
-
-    # ─── Eski oddiy emoji (📁 📩 🦹 va h.k.) larni RAM dan va bazadan tozalaymiz ───
-    for _k in list(RAM.emoji_ids.keys()):
-        _v = str(RAM.emoji_ids.get(_k, "")).strip()
-        if not _v.isdigit():
-            del RAM.emoji_ids[_k]
     EMOJI_IDS.clear()
     EMOJI_IDS.update(RAM.emoji_ids)
-
-    # Tozalangan emoji_ids bilan merged ni qayta yasaymiz — bazaga shu saqlansin
-    merged["emoji_ids"] = dict(RAM.emoji_ids)
 
     blob_eps  = sum(len(m.get("episodes", []) or []) for m in (blob.get("movies")  or {}).values()) if has_blob  else 0
     local_eps = sum(len(m.get("episodes", []) or []) for m in (local.get("movies") or {}).values()) if has_local else 0
@@ -1072,7 +916,7 @@ def db_initial_load():
 #          BIR MARTA, hammasi tugagandan keyin yoziladi.
 # ──────────────────────────────────────────────────────────
 
-JSONBLOB_DEBOUNCE = 12.0   # soniya — qism yuborish tugagandan keyin
+JSONBLOB_DEBOUNCE = 8.0   # soniya — qism yuborish tugagandan keyin
 
 _jsonblob_timer_task = None     # asyncio.Task — kutilayotgan saqlash
 _jsonblob_save_lock = None      # asyncio.Lock — _setup da yaratiladi
@@ -1186,15 +1030,7 @@ def bt(key: str) -> str:
 
 
 def get_eid(key: str):
-    """Custom emoji ID qaytaradi. Faqat raqamli ID bo'lsa qaytaradi, aks holda None."""
-    eid = EMOJI_IDS.get(key)
-    if not eid:
-        return None
-    s = str(eid).strip()
-    # Telegram custom emoji ID: 15-19 ta raqam (manfiy bo'lmasligi kerak)
-    if s.isdigit() and len(s) >= 10:
-        return s
-    return None
+    return EMOJI_IDS.get(key)
 
 
 def _norm_search_text(value: str) -> str:
@@ -1294,7 +1130,7 @@ def _gsheet_append_row(row_data: list) -> bool:
             url += f"&key={GSHEET_API}"
         body = {"values": [row_data]}
         r = requests.post(url, headers={"Content-Type": "application/json"},
-                          data=json.dumps(body), timeout=10)
+                          data=json.dumps(body), timeout=5)
         return r.status_code in (200, 201)
     except Exception as e:
         logger.warning(f"GSheet xato: {e}")
@@ -1309,23 +1145,6 @@ def _gsheet_log_user(user_id: int, name: str, username: str):
 
 def register_user(user):
     uid_str = str(user.id)
-
-    # ── SUNIY ODAM (BOT) ANIQLASH VA AVTOMATIK BLOKLASH ──────
-    if getattr(user, "is_bot", False):
-        if uid_str not in RAM.blocked_users:
-            RAM.blocked_users[uid_str] = {
-                "blocked_at": time.time(),
-                "by": ADMIN_ID,
-                "reason": "auto_bot_detected",
-            }
-            logger.warning(f"🤖 Bot aniqlandi va avtomat bloklandi: {user.id} (@{user.username})")
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(schedule_save())
-            except RuntimeError:
-                save_sync()
-        return  # Botni ro'yxatdan o'tkazmaymiz
-
     if uid_str not in RAM.users:
         RAM.users[uid_str] = {
             "name": user.full_name,
@@ -1350,7 +1169,7 @@ def register_user(user):
 # ══════════════════════════════════════════════════════════
 
 _sub_cache: dict[int, tuple[float, list]] = {}
-SUB_CACHE_TTL = 10
+SUB_CACHE_TTL = 120  # 10 dan 120 ga oshirildi — tezroq javob
 
 def _sub_cache_get(user_id):
     e = _sub_cache.get(user_id)
@@ -1467,20 +1286,18 @@ def _get_admin_nav_key(text: str) -> str | None:
 # INLINE KEYBOARD YORDAMCHI
 # ══════════════════════════════════════════════════════════
 
-def ibtn(text, data=None, url=None, style=None, emoji_id=None, web_app_url=None):
+def ibtn(text, data=None, url=None, style=None, emoji_id=None):
     b = {"text": text}
-    if data:        b["callback_data"] = data
-    if url:         b["url"] = url
-    if style:       b["style"] = style
-    if emoji_id:    b["icon_custom_emoji_id"] = emoji_id
-    if web_app_url: b["web_app"] = {"url": web_app_url}
+    if data:     b["callback_data"] = data
+    if url:      b["url"] = url
+    if style:    b["style"] = style
+    if emoji_id: b["icon_custom_emoji_id"] = emoji_id
     return b
 
-def rbtn(text, style=None, emoji_id=None, web_app_url=None):
+def rbtn(text, style=None, emoji_id=None):
     b = {"text": text}
-    if style:        b["style"] = style
-    if emoji_id:     b["icon_custom_emoji_id"] = emoji_id
-    if web_app_url:  b["web_app"] = {"url": web_app_url}
+    if style:    b["style"] = style
+    if emoji_id: b["icon_custom_emoji_id"] = emoji_id
     return b
 
 def ikb(rows):
@@ -1497,8 +1314,7 @@ def rkb(rows, resize=True):
 def main_menu_kb(is_admin=False):
     rows = [[
         rbtn(bt("yordam"),  style="danger", emoji_id=get_eid("yordam")),
-        rbtn(bt("install"), style="success", emoji_id=get_eid("install"),
-             web_app_url="https://www.youtube.com/@DramlarUz"),
+        rbtn(bt("install"), style="success", emoji_id=get_eid("install")),
     ], [
         rbtn(bt("barcha_kino"), style="primary", emoji_id=get_eid("barcha_kino")),
         rbtn(bt("balans"),      style="success", emoji_id=get_eid("balans")),
@@ -1517,6 +1333,7 @@ def admin_menu_kb(uid=None):
         ("kanal_post",     "primary"),
         ("maj_kanal",      "danger"),
         ("karta",          "success"),
+        ("ilova",          "primary"),
         ("kino_kanal_set", "success"),
         ("emoji_soz",      "primary"),
         ("qism_tahrir",    "primary"),
@@ -1526,7 +1343,6 @@ def admin_menu_kb(uid=None):
         ("start_xab",      "primary"),
         ("qism_och",       "success"),
         ("foydalanuvchi_blok", "danger"),
-        ("premium_plan_manage", "success"),
     ]
     if uid is not None and not is_super_admin(uid):
         pairs = [(k, st) for (k, st) in pairs if has_perm(uid, k)]
@@ -1538,6 +1354,7 @@ def admin_menu_kb(uid=None):
     if buf: rows.append(buf)
     if uid is None or is_super_admin(uid):
         rows.append([rbtn(bt("admin_qosh"), style="success", emoji_id=get_eid("admin_qosh"))])
+        rows.append([rbtn(bt("admin_lichka_set"), style="primary")])
     rows.append([rbtn(bt("asosiy"), style="success", emoji_id=get_eid("asosiy"))])
     return rkb(rows)
 
@@ -1677,14 +1494,9 @@ def share_kb(url: str):
     return ikb([[ibtn(bt("ulash"), url=url, style="primary", emoji_id=get_eid("ulash"))]])
 
 def channel_post_kb(bot_username: str, code: str):
-    eid = get_eid("tomosha")
-    # Custom emoji yo'q bo'lsa default ▶️ ko'rsatamiz
-    label = bt("tomosha")
-    if not eid:
-        label = f'▶️ {label}'
-    return ikb([[ibtn(label,
+    return ikb([[ibtn(bt("tomosha"),
         url=f"https://t.me/{bot_username}?start=code_{code}",
-        style="success", emoji_id=eid)]])
+        style="success", emoji_id=get_eid("tomosha"))]])
 
 # ─── AUTO-POST KANALGA (har qism qo'shilganda) ─────────────
 def get_auto_post_channel():
@@ -1700,23 +1512,11 @@ def get_auto_post_channel():
     return None
 
 def _pe(key: str, fallback: str) -> str:
-    """Post uchun emoji qaytaradi.
-    Ustuvorlik: 1) RAM.btn_texts[key] ichidagi emoji
-                2) tg-emoji (Premium viewers uchun)
-                3) POST_EMOJI_DEFAULTS
-                4) fallback"""
-    # 1. Emoji sozlamalarida matn emoji o'rnatilgan bo'lsa — hammaga ko'rinadi
-    btn_val = RAM.btn_texts.get(key, "")
-    if btn_val:
-        from_btn = extract_emoji_prefix(btn_val)
-        if from_btn:
-            return from_btn
-    # 2. Custom emoji ID bor bo'lsa — Premium foydalanuvchilarga ko'rinadi
-    eid = get_eid(key)
+    """Premium (custom) emoji yoki oddiy emoji qaytaradi."""
+    eid = EMOJI_IDS.get(key)
     if eid:
         return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
-    # 3. Default chiroyli emoji
-    return POST_EMOJI_DEFAULTS.get(key, fallback)
+    return fallback
 
 def build_auto_post_caption(movie: dict, code: str, ep_count: int, finished: bool = False, bot_username: str = "") -> str:
     title  = movie.get("title", code)
@@ -1727,11 +1527,11 @@ def build_auto_post_caption(movie: dict, code: str, ep_count: int, finished: boo
     watch_url = f"https://t.me/{bot_username}?start=code_{code}" if bot_username else ""
     watch = f'<a href="{watch_url}">Tomosha qilish</a>' if watch_url else "Tomosha qilish"
     return (
-        f'{_pe("post_nomi","🎭")} <b>Nomi : {title}</b>\n\n'
-        f'{_pe("post_qism","🎞")} <b>Qism : {qism_str}</b>\n\n'
-        f'{_pe("post_kod","🔑")} <b>Kod : {code}</b>\n\n'
+        f'{_pe("post_nomi","📁")} <b>Nomi : {title}</b>\n\n'
+        f'{_pe("post_qism","📩")} <b>Qism : {qism_str}</b>\n\n'
+        f'{_pe("post_kod","🦹")} <b>Kod : {code}</b>\n\n'
         f'{_pe("post_janr","🎬")} <b>Janr : {janr}</b>\n\n'
-        f'{_pe("post_tili","🌐")} <b>Tili : {tili}</b>\n\n'
+        f'{_pe("post_tili","🔮")} <b>Tili : {tili}</b>\n\n'
         f'{_pe("post_bot","🤖")} <b>Bot : {bot_line}</b>\n\n'
         f'{_pe("post_korish","👁")} <b>Ko\'rish : {watch}</b>'
     )
@@ -1753,9 +1553,9 @@ async def auto_post_episode_added(bot, code: str, finished: bool = False):
         ep_count = len(movie.get("episodes", []))
         if ep_count == 0:
             return
-        bot_me = await bot.get_me()
-        markup = channel_post_kb(bot_me.username, code)
-        caption = build_auto_post_caption(movie, code, ep_count, finished=finished, bot_username=bot_me.username)
+        bot_me_username = await _get_bot_username(bot)
+        markup = channel_post_kb(bot_me_username, code)
+        caption = build_auto_post_caption(movie, code, ep_count, finished=finished, bot_username=bot_me_username)
         msg_id  = movie.get("auto_post_msg_id")
         chat_id = movie.get("auto_post_chat_id") or chat
         poster  = movie.get("poster_file_id")
@@ -1836,8 +1636,7 @@ def payment_sent_kb(card: str = "", price: int = 0):
 def balans_kb():
     """Foydalanuvchi balans sahifasi inline klaviaturasi."""
     return ikb([[
-        ibtn(bt("hisob_toldirish"), data="topup_start", style="success", emoji_id=get_eid("hisob_toldirish")),
-        ibtn("💎 Pryum olish", data="premium_plans_show", style="primary"),
+        ibtn(bt("hisob_toldirish"), data="topup_start", style="success"),
     ]])
 
 
@@ -1938,9 +1737,6 @@ def bc_more_yesno_kb():
 # ══════════════════════════════════════════════════════════
 
 async def sm(bot, chat_id, text, markup=None, pm="HTML", reply_to_message_id=None):
-    # Bot flood himoyasi — bir foydalanuvchiga juda tez xabar yubormasin
-    if isinstance(chat_id, int) and not _bot_flood_ok(chat_id):
-        await asyncio.sleep(0.3)
     kw = {"chat_id": chat_id, "text": text, "parse_mode": pm}
     if markup: kw["reply_markup"] = markup
     if reply_to_message_id: kw["reply_to_message_id"] = reply_to_message_id
@@ -1956,266 +1752,6 @@ async def sv(bot, chat_id, video, caption, markup=None, pm="HTML", protect=False
     if markup: kw["reply_markup"] = markup
     if protect: kw["protect_content"] = True
     return await bot.send_video(**kw)
-
-
-# ══════════════════════════════════════════════════════════
-# WATERMARK — VIDEO ICHIGA FOYDALANUVCHI ID QOʻSHISH
-# ══════════════════════════════════════════════════════════
-
-def _check_ffmpeg() -> bool:
-    """ffmpeg o'rnatilganligini tekshiradi — har safar yangi tekshiruv."""
-    for ffmpeg_path in ["ffmpeg", "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
-        try:
-            result = subprocess.run(
-                [ffmpeg_path, "-version"], capture_output=True, timeout=5
-            )
-            if result.returncode == 0:
-                logger.info(f"✅ ffmpeg topildi: {ffmpeg_path}")
-                return True
-        except Exception:
-            continue
-    try:
-        r = subprocess.run(["which", "ffmpeg"], capture_output=True, timeout=3, text=True)
-        if r.returncode == 0 and r.stdout.strip():
-            logger.info(f"✅ ffmpeg (which): {r.stdout.strip()}")
-            return True
-    except Exception:
-        pass
-    logger.warning("❌ ffmpeg hech qaerda topilmadi!")
-    return False
-
-
-def _find_font() -> str:
-    """Serverda mavjud fontni topadi."""
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    # Tizimdan birinchi .ttf faylni qidiramiz
-    try:
-        r = subprocess.run(
-            ["find", "/usr/share/fonts", "-name", "*.ttf", "-type", "f"],
-            capture_output=True, timeout=5, text=True
-        )
-        lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-        if lines:
-            return lines[0]
-    except Exception:
-        pass
-    return ""
-
-
-def _add_watermark_ffmpeg(input_path: str, output_path: str, user_id: str) -> bool:
-    """
-    ffmpeg orqali videoga watermark qo'shadi.
-    textfile= usuli ishlatiladi — apostrof muammosi yo'q.
-    """
-    textfile_path = None
-    try:
-        # Matnni alohida faylga yozamiz — ekranlash muammosi bo'lmaydi
-        fd, textfile_path = tempfile.mkstemp(suffix=".txt", prefix="wm_txt_")
-        os.close(fd)
-        wm_line1 = "O'g'irlash taqiqlanadi"
-        wm_line2 = f"ID: {user_id}"
-
-        font_path = _find_font()
-        font_opt  = f":fontfile={font_path}" if font_path else ""
-
-        base = (
-            f"fontsize=30:fontcolor=white"
-            f":box=1:boxcolor=black@0.5:boxborderw=8"
-            f"{font_opt}"
-        )
-
-        # Turli joylarda paydo bo'lib yo'qoluvchi 6 ta drawtext
-        # textfile= uchun har bir joylashuv uchun alohida fayl kerak emas —
-        # x/y/alpha farqli, lekin bir xil textfile ishlatsa bo'ladi
-        positions = [
-            # (x_expr,                           y_expr,                       t_offset)
-            ("(main_w-text_w)/2",                "(main_h-text_h)/2",          0.0),
-            ("w*0.05",                           "h*0.05",                     0.7),
-            ("main_w-text_w-w*0.05",             "h*0.05",                     1.4),
-            ("w*0.05",                           "main_h-text_h-h*0.08",       2.1),
-            ("main_w-text_w-w*0.05",             "main_h-text_h-h*0.08",       2.8),
-            ("(main_w-text_w)/2",                "h*0.88",                     3.5),
-        ]
-
-        filters = []
-        for x, y, off in positions:
-            alpha = f"if(lt(mod(t+{off},5),2.5),0.9,0)"
-            # line1
-            with open(textfile_path, "w", encoding="utf-8") as tf:
-                tf.write(wm_line1)
-            f1 = (
-                f"drawtext=textfile={textfile_path}"
-                f":{base}"
-                f":x={x}:y={y}"
-                f":alpha='{alpha}'"
-            )
-            # line2 (biroz pastroq)
-            with open(textfile_path, "w", encoding="utf-8") as tf:
-                tf.write(wm_line2)
-            f2 = (
-                f"drawtext=textfile={textfile_path}"
-                f":{base}:fontsize=22"
-                f":x={x}:y={y}+36"
-                f":alpha='{alpha}'"
-            )
-            filters.append(f1)
-            filters.append(f2)
-
-        # Muammoni hal qilish: textfile har bir drawtext uchun ayni paytda o'qiladi,
-        # shuning uchun HAMMA drawtext uchun alohida temp fayl yaratamiz
-        # (yuqoridagi kod faqat oxirgi faylni yozadi).
-        # To'g'ri yechim: har bir drawtext uchun alohida temp fayl.
-
-        tmp_files = []
-        filters_fixed = []
-        for x, y, off in positions:
-            alpha = f"if(lt(mod(t+{off},5),2.5),0.9,0)"
-
-            fd1, tf1 = tempfile.mkstemp(suffix=".txt", prefix="wm1_")
-            os.close(fd1)
-            with open(tf1, "w", encoding="utf-8") as fh:
-                fh.write(wm_line1)
-            tmp_files.append(tf1)
-
-            fd2, tf2 = tempfile.mkstemp(suffix=".txt", prefix="wm2_")
-            os.close(fd2)
-            with open(tf2, "w", encoding="utf-8") as fh:
-                fh.write(wm_line2)
-            tmp_files.append(tf2)
-
-            f1 = (
-                f"drawtext=textfile={tf1}"
-                f":{base}"
-                f":x={x}:y={y}"
-                f":alpha='{alpha}'"
-            )
-            f2 = (
-                f"drawtext=textfile={tf2}"
-                f":{base}:fontsize=22"
-                f":x={x}:y={y}+38"
-                f":alpha='{alpha}'"
-            )
-            filters_fixed.append(f1)
-            filters_fixed.append(f2)
-
-        vf_filter = ",".join(filters_fixed)
-
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", input_path,
-            "-vf", vf_filter,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "22",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            output_path
-        ]
-
-        logger.info(f"ffmpeg buyruq: {' '.join(cmd[:6])} ...")
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
-
-        if result.returncode != 0:
-            err = result.stderr.decode("utf-8", errors="replace")
-            logger.error(f"ffmpeg xato (returncode={result.returncode}):\n{err[:800]}")
-            return False
-
-        logger.info("ffmpeg watermark: muvaffaqiyatli!")
-        return True
-
-    except subprocess.TimeoutExpired:
-        logger.error("ffmpeg: vaqt tugadi (5 daqiqa)")
-        return False
-    except Exception as e:
-        logger.error(f"ffmpeg istisno: {e}")
-        return False
-    finally:
-        # Vaqtinchalik matn fayllarini o'chiramiz
-        for p in ([textfile_path] if textfile_path else []) + (tmp_files if 'tmp_files' in dir() else []):
-            if p and os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
-
-
-async def sv_watermarked(bot, chat_id: int, file_id: str, caption: str,
-                         user_id, markup=None, pm="HTML", protect=False):
-    """
-    Videoni foydalanuvchiga watermark bilan yuboradi.
-    ffmpeg mavjud bo'lmasa yoki xato bo'lsa — oddiy video yuboriladi.
-    45 soniyadan oshsa — originalni yuborib, kutmaymiz.
-    """
-    # Har safar runtime da tekshiramiz (modul yuklanganda emas)
-    if not _check_ffmpeg():
-        logger.warning("❌ ffmpeg topilmadi — watermarksiz yuborilmoqda")
-        return await sv(bot, chat_id, file_id, caption, markup, pm, protect)
-
-    tmp_in  = None
-    tmp_out = None
-    try:
-        async def _do_watermark():
-            nonlocal tmp_in, tmp_out
-            # 1) Telegram faylini yuklab olamiz
-            tg_file = await bot.get_file(file_id)
-            suffix  = ".mp4"
-
-            # Vaqtinchalik fayllar
-            fd_in,  tmp_in  = tempfile.mkstemp(suffix=suffix, prefix="wm_in_")
-            fd_out, tmp_out = tempfile.mkstemp(suffix=suffix, prefix="wm_out_")
-            os.close(fd_in)
-            os.close(fd_out)
-
-            # Video yuklab olamiz
-            await tg_file.download_to_drive(tmp_in)
-            logger.info(f"Watermark: {file_id[:20]}... yuklab olindi ({os.path.getsize(tmp_in)//1024} KB)")
-
-            # ffmpeg watermark — alohida threadda (bloklash uchun)
-            success = await asyncio.to_thread(_add_watermark_ffmpeg, tmp_in, tmp_out, str(user_id))
-
-            if success and os.path.getsize(tmp_out) > 1000:
-                logger.info(f"Watermark: muvaffaqiyatli ({os.path.getsize(tmp_out)//1024} KB)")
-                with open(tmp_out, "rb") as vf:
-                    return await sv(bot, chat_id, vf, caption, markup, pm, protect)
-            else:
-                logger.warning("Watermark: ffmpeg muvaffaqiyatsiz — originalni yuboramiz")
-                return await sv(bot, chat_id, file_id, caption, markup, pm, protect)
-
-        # ── 45 soniya timeout — bot qotib qolmasin ──
-        return await asyncio.wait_for(_do_watermark(), timeout=45.0)
-
-    except asyncio.TimeoutError:
-        logger.warning(f"sv_watermarked: 45s timeout — originalni yuboramiz")
-        try:
-            return await sv(bot, chat_id, file_id, caption, markup, pm, protect)
-        except Exception as e2:
-            logger.error(f"sv_watermarked timeout fallback xato: {e2}")
-    except Exception as e:
-        logger.error(f"sv_watermarked xato: {e}")
-        # Xato bo'lsa oddiy video yuboramiz
-        try:
-            return await sv(bot, chat_id, file_id, caption, markup, pm, protect)
-        except Exception as e2:
-            logger.error(f"sv_watermarked fallback xato: {e2}")
-    finally:
-        # Vaqtinchalik fayllarni o'chiramiz
-        for p in [tmp_in, tmp_out]:
-            if p and os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
 
 
 # ══════════════════════════════════════════════════════════
@@ -2264,6 +1800,9 @@ async def resolve_required_channel(bot, raw_username: str) -> dict:
     }
 
 async def check_subscription(user_id, bot) -> list:
+    # ✅ Adminlar uchun obuna tekshiruvi yo'q — tezroq
+    if is_any_admin(user_id):
+        return []
     cached = _sub_cache_get(user_id)
     if cached is not None: return cached
     channels = RAM.channels
@@ -2272,22 +1811,44 @@ async def check_subscription(user_id, bot) -> list:
         return []
 
     async def check_one(ch):
+        # So'rovli kanallar (join_request=True) — bot a'zolikni to'g'ridan-to'g'ri tekshira olmaydi
+        # Chunki bu private/so'rovli kanallar. Shuning uchun ularni har doim talab qilamiz
+        # (join_request_handler tasdiqlangandan keyin _sub_cache_invalidate chaqiriladi)
+        if ch.get("join_request"):
+            # Bot a'zolikni tekshirishga urinish (agar kanal public bo'lsa)
+            chat_ref = _channel_ref(ch)
+            if chat_ref:
+                try:
+                    member = await bot.get_chat_member(chat_ref, user_id)
+                    status = getattr(member, "status", "")
+                    is_member = getattr(member, "is_member", None)
+                    if status in ("creator", "administrator", "member") or is_member is True:
+                        return None  # Obunachi — o'tkazamiz
+                except Exception:
+                    pass  # Tekshirib bo'lmadi — talab qilamiz
+            return ch  # So'rovli kanal — talab qilamiz
+
+        # Oddiy majburiy kanal — a'zolikni tekshiramiz
         try:
             chat_ref = _channel_ref(ch)
             if not chat_ref:
-                return None
+                return None  # Kanal ma'lumoti noto'g'ri — o'tkazamiz
             member = await bot.get_chat_member(chat_ref, user_id)
             status = getattr(member, "status", "")
             is_member = getattr(member, "is_member", None)
             # creator, administrator, member — o'tkazamiz
             if status in ("creator", "administrator", "member") or is_member is True:
                 return None
-            # So'rovli kanal: "restricted" yoki "left" bo'lsa ham
-            # so'rov yuborilgan bo'lishi mumkin — bu holatda ham talab qilamiz
-            return ch
+            return ch  # Obunachi emas — talab qilamiz
         except Exception as e:
-            logger.warning(f"Sub check {ch.get('username','?')}: {e}")
-            return None
+            err_str = str(e).lower()
+            # Bot kanalda admin emas yoki kanal topilmadi — o'tkazamiz (botga aloqador xato)
+            if "chat not found" in err_str or "bot is not a member" in err_str or "forbidden" in err_str:
+                logger.warning(f"Sub check skip (bot xatosi) {ch.get('username','?')}: {e}")
+                return None
+            # Boshqa xatolar (network, timeout) — kanal talab qilinadi (xavfsizroq)
+            logger.warning(f"Sub check error {ch.get('username','?')}: {e}")
+            return ch
 
     results = await asyncio.gather(*[check_one(ch) for ch in channels], return_exceptions=True)
     not_subbed = [r for r in results if r is not None and not isinstance(r, Exception)]
@@ -3116,13 +2677,6 @@ async def _send_kino_list_page(bot, chat_id: int, page: int = 0, query=None):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_duplicate_update(update): return
     user = update.effective_user
-
-    # ── SUNIY ODAM (BOT) TEKSHIRUVI — darhol bloklash ────
-    if getattr(user, "is_bot", False):
-        register_user(user)  # auto-block ichida
-        logger.warning(f"🤖 Bot /start yubordi — rad etildi: {user.id}")
-        return
-
     register_user(user)
     clear_admin_state(context)
     args = context.args
@@ -3188,11 +2742,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         start_inline_rows = [[kod_btn]]
 
-    # "Qo'llanma" tugmasi — doim ko'rinadi, mini ilova ochadi
-    start_inline_rows.append([
-        ibtn(bt("install"), url="https://www.youtube.com/@DramlarUz",
-             style="success", emoji_id=get_eid("install"))
-    ])
+    # "Qo'llanma" tugmasi — install_video_id bo'lsa qo'shiladi
+    if RAM.settings.get("install_video_id"):
+        start_inline_rows.append([
+            ibtn(bt("install"), data="start_qollanma", style="success",
+                 emoji_id=get_eid("install"))
+        ])
 
     inline_kb = ikb(start_inline_rows)
 
@@ -3223,13 +2778,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = q.from_user.id
     await q.answer()
 
-    # ── ANTI-SPAM (callback tugmalarni tez bosishga qarshi) ──
-    if not is_any_admin(uid):
-        is_spam, reason = _anti_spam_check(uid)
-        if is_spam:
-            await _apply_spam_action(context.bot, uid, reason)
-            return
-
     # ── Bloklangan foydalanuvchi — hech narsa qilmaymiz ──
     if is_blocked_user(uid) and not is_any_admin(uid):
         await context.bot.send_message(
@@ -3242,6 +2790,43 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "start_kod":
         await sm(context.bot, uid,
                  "🎬 Kino <b>kodini</b> yuboring — video darhol keladi!")
+        return
+
+    if data == "start_qollanma":
+        vid_id = RAM.settings.get("install_video_id")
+        if vid_id:
+            cap = RAM.settings.get("install_caption") or "📖 <b>Bot qo'llanmasi</b>"
+            # Bot haqida qo'shimcha ma'lumot — blockquote formatida
+            cap += (
+                "\n\n"
+                "<blockquote>"
+                "ℹ️ <b>Bot haqida:</b>\n\n"
+                "🎬 Ushbu bot orqali kinolarni qulay tarzda tomosha qilishingiz mumkin.\n"
+                "🔍 Kino kodini yuboring va video darhol keladi!\n"
+                "💰 Balans tizimi orqali pullik qismlarni sotib olishingiz mumkin.\n"
+                "📡 Yangi kinolardan xabardor bo'lish uchun kanalimizga obuna bo'ling.\n\n"
+                "💳 <b>Balansni qanday to'ldirish:</b>\n\n"
+                "1️⃣ Pastdagi <b>«Balans»</b> tugmasini bosing\n"
+                "2️⃣ <b>«Hisobni to'ldirish»</b> tugmasini bosing\n"
+                "3️⃣ To'ldirmoqchi bo'lgan <b>miqdorni</b> kiriting\n"
+                "4️⃣ Bot sizga <b>karta raqamini</b> yuboradi — to'lang\n"
+                "5️⃣ To'lov o'tishi bilan balans <b>avtomatik</b> hisobingizga qo'shiladi!\n\n"
+                "⚠️ <b>Diqqat:</b> 1 so'm yoki undan ko'proq tashlasangiz — "
+                "pul hisobingizga <b>tushmaydi!</b> Faqat <b>aniq miqdorni</b> to'lang."
+                "</blockquote>"
+            )
+            # Admin lichkasi tugmasi
+            admin_lichka = (RAM.settings.get("admin_lichka") or "").strip().lstrip("@")
+            kb = None
+            if admin_lichka:
+                kb = ikb([[ibtn("👤 Admin lichkasi", url=f"https://t.me/{admin_lichka}",
+                                style="danger", emoji_id=get_eid("admin_lichka_set"))]])
+            try:
+                await sv(context.bot, uid, vid_id, cap, kb)
+            except Exception as e:
+                await sm(context.bot, uid, f"❌ Video yuborishda xato: {e}")
+        else:
+            await q.answer("Qo'llanma videosi hali o'rnatilmagan!", show_alert=True)
         return
 
     if data.startswith("kino_list|"):
@@ -3574,35 +3159,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ══════════════════════════════════════════════
-    # 💎 PREMIUM TARIFLAR callbacklari
-    # ══════════════════════════════════════════════
-    if data in ("premium_plans_show", "premium_plans_close", "add_premium_plan", "go_admin_panel") \
-            or data.startswith("premium_plan_info|") \
-            or data.startswith("premium_plan_buy|") \
-            or data.startswith("del_premium_plan|"):
-        await cb_premium_plans(update, context)
-        return
-
-    # ══════════════════════════════════════════════
     # BALANS TO'LDIRISH — foydalanuvchi callbacklari
     # ══════════════════════════════════════════════
     if data == "topup_start":
+        # Foydalanuvchi "Hisobni to'ldirish" tugmasini bosdi
         context.user_data["admin_state"] = "topup_amount"
-        # Balans xabarini o'chiramiz
-        balans_msg_id = context.user_data.pop("balans_msg_id", None)
-        if balans_msg_id:
-            try:
-                await context.bot.delete_message(chat_id=uid, message_id=balans_msg_id)
-            except Exception:
-                pass
-        # Miqdor kiritish so'rovini yuboramiz va message_id saqlaymiz
-        amount_prompt = await sm(context.bot, uid,
+        await sm(context.bot, uid,
             "💳 <b>Hisobni to'ldirish</b>\n\n"
             "Qancha so'm kiritmoqchisiz?\n"
             "💡 <b>Minimal miqdor: 1 000 so'm</b>\n\n"
             "<i>Faqat raqam yuboring (masalan: 10000)</i>")
-        if amount_prompt:
-            context.user_data["topup_amount_msg_id"] = amount_prompt.message_id
         return
 
     if data == "topup_send_check":
@@ -4023,8 +3589,6 @@ async def cb_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    # ── Darhol Telegram'ga javob beramiz — "tugma bosildi" (10s timeout bor) ──
-    await q.answer("⏳ Video tayyorlanmoqda...")
     parts = q.data.split("|")
     if len(parts) != 3: return
     _, code, ep = parts
@@ -4104,41 +3668,15 @@ async def cb_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Qism topilmadi", show_alert=True)
         return
 
-    bot_me    = await context.bot.get_me()
-    share_url = f"https://t.me/share/url?url=https://t.me/{bot_me.username}?start=code_{code}"
+    bot_username = await _get_bot_username(context.bot)
+    share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}?start=code_{code}"
     caption   = f"🎬 <b>{movie.get('title')}</b>\n📺 Qism: <b>{ep}</b>"
-
-    # ── Darhol "Yuklanmoqda" xabari — foydalanuvchi bot qotib qoldi deb o'ylamasin ──
-    loading_msg = None
     try:
-        loading_msg = await context.bot.send_message(
-            chat_id=q.from_user.id,
-            text="⏳ <b>Video yuklanmoqda...</b>\nBiroz kuting ☕",
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
-
-    try:
-        # Watermark bilan yuboramiz — foydalanuvchi ID raqami videoda ko'rinadi
-        await sv_watermarked(
-            context.bot, q.from_user.id, eps[idx], caption,
-            user_id=q.from_user.id,
-            markup=share_kb(share_url), protect=True
-        )
+        await sv(context.bot, q.from_user.id, eps[idx], caption, share_kb(share_url), protect=True)
     except Exception as e:
         logger.error(f"Video yuborishda xato: {e}")
         await sm(context.bot, q.from_user.id, "❌ Video yuborishda xato. Qayta urinib ko'ring.")
-    finally:
-        # "Yuklanmoqda" xabarini o'chiramiz
-        if loading_msg:
-            try:
-                await context.bot.delete_message(
-                    chat_id=q.from_user.id,
-                    message_id=loading_msg.message_id
-                )
-            except Exception:
-                pass
+        return
 
     async def update_stats():
         try:
@@ -4217,7 +3755,7 @@ async def cb_buy_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         paid_eps_updated.append(ek)
 
-    await save_now()
+    await schedule_save()
 
     expire_dt = datetime.fromtimestamp(expire_at).strftime("%d.%m.%Y %H:%M")
     await q.answer(f"✅ {len(paid_eps_updated)} ta qism ochildi! 7 kun ochiq.", show_alert=True)
@@ -4438,7 +3976,7 @@ async def cb_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _get_admin_reserved_texts() -> set:
     keys = [
         "kino_joy", "qism_qosh", "pullik", "stat", "kanal_post",
-        "maj_kanal", "karta", "emoji_soz", "asosiy",
+        "maj_kanal", "karta", "ilova", "emoji_soz", "asosiy",
         "boshqarish", "broadcast", "kino_uch", "yordam", "install",
         "barcha_kino", "kino_kanal_set",
         "premium_ber", "start_xab", "balans",
@@ -4459,22 +3997,9 @@ def _get_admin_reserved_texts() -> set:
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_duplicate_update(update): return
     user = update.effective_user
-
-    # ── SUNIY ODAM (BOT) TEKSHIRUVI ──
-    if getattr(user, "is_bot", False):
-        register_user(user)  # auto-block
-        return
-
     uid  = user.id
     msg  = update.message
     text = (msg.text or "").strip()
-
-    # ── ANTI-SPAM TEKSHIRUVI ──────────────────────────────
-    if not is_any_admin(uid):
-        is_spam, reason = _anti_spam_check(uid)
-        if is_spam:
-            await _apply_spam_action(context.bot, uid, reason)
-            return
 
     # ── Bloklangan foydalanuvchi — hech narsa qilmaymiz ──
     if is_blocked_user(uid) and not is_any_admin(uid):
@@ -4498,18 +4023,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Kamida <b>1 000 so'm</b> kiriting:")
             return
         context.user_data.pop("admin_state", None)
-        # Miqdor so'rovi xabarini o'chiramiz
-        topup_amount_msg_id = context.user_data.pop("topup_amount_msg_id", None)
-        if topup_amount_msg_id:
-            try:
-                await context.bot.delete_message(chat_id=uid, message_id=topup_amount_msg_id)
-            except Exception:
-                pass
-        # Foydalanuvchi yozgan raqam xabarini ham o'chiramiz
-        try:
-            await context.bot.delete_message(chat_id=uid, message_id=msg.message_id)
-        except Exception:
-            pass
 
         # ══════════════════════════════════════════════════════
         # ⚡ TO'QNASHUV TEKSHIRUVI — bir vaqtda xuddi shu miqdor
@@ -4527,30 +4040,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if _amt:
                     busy_amounts.add(int(_amt))
 
-        # Agar konflikt bo'lsa — noyob miqdor topamiz
+        # Agar konflikt bo'lsa — foydalanuvchidan boshqa miqdor kiritishini so'raymiz
+        if amount in busy_amounts:
+            context.user_data["admin_state"] = "topup_amount"
+            await sm(context.bot, uid,
+                f"⚠️ <b>Bu miqdor hozir band!</b>\n\n"
+                f"Ayni paytda boshqa foydalanuvchi <b>{amount:,} so'm</b> to'lov qilmoqda.\n\n"
+                f"To'lovlar aralashib ketmasligi uchun <b>boshqa miqdor</b> kiriting:\n"
+                f"<i>(masalan: {amount + 500:,} yoki {amount + 1000:,} so'm)</i>")
+            return
+
         conflict_amount = None
         final_amount = amount
-        if amount in busy_amounts:
-            conflict_amount = amount
-            candidate = amount + 1
-            while candidate in busy_amounts:
-                candidate += 1
-                if candidate > amount + 200:
-                    # 200 dan oshib ketsa — katta offset qo'shamiz
-                    import random as _random
-                    candidate = amount + _random.randint(201, 500)
-                    break
-            final_amount = candidate
-
-        # Foydalanuvchini xabardor qilish — agar miqdor o'zgartirildisa
-        if conflict_amount is not None:
-            await sm(context.bot, uid,
-                f"⚠️ <b>Diqqat! Miqdor o'zgartirildi.</b>\n\n"
-                f"Ayni paytda boshqa foydalanuvchi tomonidan "
-                f"<b>{conflict_amount:,} so'm</b> to'lov qilinmoqda.\n\n"
-                f"To'lovlar aralashib ketmasligi uchun siz aynan:\n\n"
-                f"💵 <b>{final_amount:,} so'm</b> to'lang!\n\n"
-                f"<i>Miqdor avtomatik tanlandi — o'zgartirmang.</i>")
         # ══════════════════════════════════════════════════════
 
         # Foydalanuvchining o'zining eski pending to'lovini bekor qilamiz
@@ -4616,15 +4117,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         card_line = f"<blockquote>💳 <b>To'lov uchun karta:</b> <code>{card}</code></blockquote>\n" if card and card != "Karta raqami o'rnatilmagan" else ""
 
-        # Agar miqdor o'zgartirildisa — alohida ogohlantirish
-        if conflict_amount is not None:
-            amount_line = (
-                f"💵 To'lanadigan miqdor: <b>{final_amount:,} so'm</b>\n"
-                f"<i>(Siz {amount:,} so'm kiritgandingiz, lekin boshqa foydalanuvchi "
-                f"bilan to'qnashuv bo'lgani uchun {final_amount:,} so'm belgilandi)</i>\n"
-            )
-        else:
-            amount_line = f"💵 Miqdor: <b>{final_amount:,} so'm</b>\n"
+        amount_line = f"💵 Miqdor: <b>{final_amount:,} so'm</b>\n"
 
         sent_msg = await sm(context.bot, uid,
             f"✅ <b>To'lov yaratildi!</b>\n\n"
@@ -4803,9 +4296,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Kanal username yoki invite linkini kiriting:\n"
                 "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
             return
-        # Agar kanal menyu tugmalaridan hech biri mos kelmasa —
-        # Admin panel tugmalarini (maj_kanal, boshqarish va h.k.) ishlata olsin.
-        # Shuning uchun bu yerda return qilmaymiz, quyidagi section 8 ga o'tamiz.
+        return
 
     # ── 5. Admin reply_to ───────────────────────────────
     if is_any_admin(uid) and "reply_to" in context.user_data:
@@ -4841,11 +4332,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_any_admin(uid):
         all_admin_btn_keys = [
             "kino_joy", "qism_qosh", "pullik", "stat",
-            "kanal_post", "maj_kanal", "karta",
+            "kanal_post", "maj_kanal", "karta", "ilova",
             "emoji_soz", "asosiy", "boshqarish", "broadcast", "kino_uch",
             "kino_kanal_set", "qism_tahrir", "admin_qosh",
             "premium_ber", "start_xab", "qism_och", "foydalanuvchi_blok",
-            "tolovlar", "premium_plan_manage",
+            "tolovlar", "admin_lichka_set",
         ]
         # Ham to'liq matn, ham emoji-siz matn bilan tekshiramiz
         all_admin_btns = {}
@@ -4888,6 +4379,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["admin_state"] = "delete_movie_code"
                 await sm(context.bot, uid, "🗑 <b>Kino o'chirish</b>\n\nKino kodini kiriting:")
                 return
+            if key == "admin_lichka_set":
+                if not is_super_admin(uid):
+                    await sm(context.bot, uid, "⛔ Faqat asosiy admin lichka o'rnatishi mumkin.", admin_menu_kb(uid))
+                    return
+                clear_admin_state(context)
+                context.user_data.pop("emoji_menu", None)
+                context.user_data["admin_state"] = "set_admin_lichka"
+                cur_lichka = (RAM.settings.get("admin_lichka") or "").strip()
+                cur_info = f"\n\nJoriy admin username: <code>@{cur_lichka}</code>" if cur_lichka else "\n\n<i>Hali o'rnatilmagan</i>"
+                await sm(context.bot, uid,
+                    f"👤 <b>Admin lichkasini qo'shish / o'chirish</b>{cur_info}\n\n"
+                    f"Admin <b>@username</b>ini kiriting\n"
+                    f"<i>O'chirish uchun <code>0</code> kiriting</i>")
+                return
             context.user_data.pop("emoji_menu", None)
             context.user_data.pop("editing_btn_key", None)
             await admin_buttons(update, context, bt(key))
@@ -4909,14 +4414,39 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if _main_btn("install"):
-        # Mini ilova (WebApp) to'g'ridan-to'g'ri reply tugmadan ochiladi.
-        # Agar foydalanuvchi matn orqali kelsa — inline tugma ko'rsatamiz.
-        web_url = "https://azizbekqiyomov5555-arch.github.io/Kkk/"
-        kb = ikb([[ibtn(bt("install"), web_app_url=web_url, style="success",
-                        emoji_id=get_eid("install"))]])
-        await sm(context.bot, uid,
-                 "📖 <b>Qo'llanmani ko'rish uchun quyidagi tugmani bosing:</b>",
-                 kb)
+        v_id = RAM.settings.get("install_video_id")
+        if not v_id:
+            await sm(context.bot, uid, "📹 Admin hali bot qo'llanma videosini joylamagan.")
+            return
+        cap = (RAM.settings.get("install_caption") or "").strip()
+        if not cap:
+            cap = "<b>Bot qo'llanma videosi</b>"
+        # Bot haqida qo'shimcha ma'lumot — blockquote formatida
+        cap += (
+            "\n\n"
+            "<blockquote>"
+            "ℹ️ <b>Bot haqida:</b>\n\n"
+            "🎬 Ushbu bot orqali kinolarni qulay tarzda tomosha qilishingiz mumkin.\n"
+            "🔍 Kino kodini yuboring va video darhol keladi!\n"
+            "💰 Balans tizimi orqali pullik qismlarni sotib olishingiz mumkin.\n"
+            "📡 Yangi kinolardan xabardor bo'lish uchun kanalimizga obuna bo'ling.\n\n"
+            "💳 <b>Balansni qanday to'ldirish:</b>\n\n"
+            "1️⃣ Pastdagi <b>«Balans»</b> tugmasini bosing\n"
+            "2️⃣ <b>«Hisobni to'ldirish»</b> tugmasini bosing\n"
+            "3️⃣ To'ldirmoqchi bo'lgan <b>miqdorni</b> kiriting\n"
+            "4️⃣ Bot sizga <b>karta raqamini</b> yuboradi — to'lang\n"
+            "5️⃣ To'lov o'tishi bilan balans <b>avtomatik</b> hisobingizga qo'shiladi!\n\n"
+            "⚠️ <b>Diqqat:</b> 1 so'm yoki undan ko'proq tashlasangiz — "
+            "pul hisobingizga <b>tushmaydi!</b> Faqat <b>aniq miqdorni</b> to'lang."
+            "</blockquote>"
+        )
+        # Admin lichkasi tugmasi
+        admin_lichka = (RAM.settings.get("admin_lichka") or "").strip().lstrip("@")
+        kb = None
+        if admin_lichka:
+            kb = ikb([[ibtn("👤 Admin lichkasi", url=f"https://t.me/{admin_lichka}",
+                            style="danger", emoji_id=get_eid("admin_lichka_set"))]])
+        await sv(context.bot, uid, v_id, cap, kb)
         return
 
     if _main_btn("barcha_kino"):
@@ -4941,9 +4471,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Joriy balans: <b>{balance:,} so'm</b>\n"
             f"📥 Jami kiritilgan: <b>{topup_tot:,} so'm</b>"
         )
-        sent_balans = await sm(context.bot, uid, txt, balans_kb())
-        if sent_balans:
-            context.user_data["balans_msg_id"] = sent_balans.message_id
+        await sm(context.bot, uid, txt, balans_kb())
         return
 
     # ── 10. Yordam so'rovi ──────────────────────────────
@@ -5087,11 +4615,6 @@ async def admin_buttons(update, context, text: str):
             await sm(context.bot, uid, "❌ To'lovlarni ko'rsatishda xato yuz berdi.", admin_menu_kb(uid))
         return
 
-    if _btn_match("premium_plan_manage"):
-        if not is_any_admin(uid): return
-        await _send_premium_plans_admin(context.bot, uid)
-        return
-
     if _btn_match("karta"):
         context.user_data["admin_state"] = "set_card"
         cur = RAM.card_number or "Kiritilmagan"
@@ -5127,6 +4650,15 @@ async def admin_buttons(update, context, text: str):
         context.user_data.pop("price_movie_code", None)
         context.user_data.pop("price_ep", None)
         await sm(context.bot, uid, "💰 <b>Qismni pullik qilish</b>\n\nKino <b>kodini</b> kiriting:")
+        return
+
+    if _btn_match("ilova"):
+        context.user_data["admin_state"] = "set_install"
+        await sm(context.bot, uid,
+            "📹 <b>Bot qo'llanma videosi</b>\n\n"
+            "Video yuboring. Video <b>captioniga</b> izoh yozsangiz — start menyuda "
+            "shu izoh ko'rsatiladi.\n\n"
+            "<i>Faqat video qabul qilinadi.</i>")
         return
 
     if _btn_match("premium_ber"):
@@ -5258,6 +4790,27 @@ async def admin_state_handler(update, context, text: str) -> bool:
     state = context.user_data.get("admin_state")
     uid   = update.effective_user.id
     if not state: return False
+
+    if state == "set_admin_lichka":
+        val = text.strip().lstrip("@")
+        if val == "0":
+            RAM.settings["admin_lichka"] = ""
+            import asyncio as _asyncio
+            _asyncio.create_task(save_now())
+            context.user_data.pop("admin_state", None)
+            await sm(context.bot, uid, "✅ Admin lichkasi o'chirildi.", admin_menu_kb(uid))
+        elif val:
+            RAM.settings["admin_lichka"] = val
+            import asyncio as _asyncio
+            _asyncio.create_task(save_now())
+            context.user_data.pop("admin_state", None)
+            await sm(context.bot, uid,
+                f"✅ Admin lichkasi saqlandi: <code>@{val}</code>\n\n"
+                f"Endi «Qo'llanma video» tugmasida 👤 <b>Admin lichkasi</b> tugmasi ko'rinadi.",
+                admin_menu_kb(uid))
+        else:
+            await sm(context.bot, uid, "⚠️ Username kiriting (masalan: @username) yoki o'chirish uchun <code>0</code>:")
+        return True
 
     if state == "broadcast_msg":
         bc = {
@@ -5784,65 +5337,6 @@ async def admin_state_handler(update, context, text: str) -> bool:
             admin_menu_kb(uid))
         return True
 
-    # ── Premium plan qo'shish: nom ──
-    if state == "add_premium_plan_name":
-        if not is_any_admin(uid): clear_admin_state(context); return True
-        context.user_data["new_plan_name"] = text.strip()
-        context.user_data["admin_state"]   = "add_premium_plan_days"
-        await sm(context.bot, uid,
-            f"💎 Tarif nomi: <b>{text.strip()}</b>\n\n"
-            f"Endi necha <b>kun</b> ekanini kiriting (masalan: 30):")
-        return True
-
-    # ── Premium plan qo'shish: kunlar ──
-    if state == "add_premium_plan_days":
-        if not is_any_admin(uid): clear_admin_state(context); return True
-        if not text.strip().isdigit() or int(text.strip()) <= 0:
-            await sm(context.bot, uid, "❌ Faqat musbat <b>raqam</b> (kun) kiriting:")
-            return True
-        context.user_data["new_plan_days"] = int(text.strip())
-        context.user_data["admin_state"]   = "add_premium_plan_price"
-        await sm(context.bot, uid,
-            f"⏳ Muddati: <b>{text.strip()} kun</b>\n\n"
-            f"Endi <b>narxini</b> kiriting (so'mda, masalan: 15000):")
-        return True
-
-    # ── Premium plan qo'shish: narx ──
-    if state == "add_premium_plan_price":
-        if not is_any_admin(uid): clear_admin_state(context); return True
-        if not text.strip().isdigit() or int(text.strip()) <= 0:
-            await sm(context.bot, uid, "❌ Faqat musbat <b>narx</b> kiriting (so'mda):")
-            return True
-        context.user_data["new_plan_price"] = int(text.strip())
-        context.user_data["admin_state"]    = "add_premium_plan_desc"
-        await sm(context.bot, uid,
-            f"💵 Narxi: <b>{int(text.strip()):,} so'm</b>\n\n"
-            f"Tarif haqida <b>qisqacha tavsif</b> yozing (yoki <code>-</code> yuboring o'tkazib yuborish uchun):")
-        return True
-
-    # ── Premium plan qo'shish: tavsif ──
-    if state == "add_premium_plan_desc":
-        if not is_any_admin(uid): clear_admin_state(context); return True
-        desc = text.strip()
-        if desc == "-": desc = ""
-        name  = context.user_data.pop("new_plan_name",  "Tarif")
-        days  = context.user_data.pop("new_plan_days",  30)
-        price = context.user_data.pop("new_plan_price", 0)
-        import uuid as _uuid
-        plan_id = str(_uuid.uuid4())[:8]
-        new_plan = {"id": plan_id, "name": name, "days": days, "price": price, "description": desc}
-        RAM.premium_plans.append(new_plan)
-        await save_now()
-        clear_admin_state(context)
-        await sm(context.bot, uid,
-            f"✅ <b>Tarif qo'shildi!</b>\n\n"
-            f"💎 Nom: <b>{name}</b>\n"
-            f"⏳ Muddat: <b>{days} kun</b>\n"
-            f"💵 Narx: <b>{price:,} so'm</b>\n"
-            f"📝 Tavsif: {desc or '—'}")
-        await _send_premium_plans_admin(context.bot, uid)
-        return True
-
     if state == "add_admin_id":
         if not is_super_admin(uid):
             clear_admin_state(context)
@@ -6267,10 +5761,6 @@ async def admin_state_handler(update, context, text: str) -> bool:
         finished = ep_count > 0 and ep_count == int(movie.get("total_episodes", ep_count) or ep_count)
         caption  = build_auto_post_caption(movie, code, ep_count, finished=finished, bot_username=bot_me.username)
         poster = movie.get("poster_file_id")
-        # DEBUG: EMOJI_IDS holatini ko'rsatamiz
-        _post_keys = ["post_nomi","post_qism","post_kod","post_janr","post_tili","post_bot","post_korish","tomosha"]
-        _dbg = "\n".join(["• " + k + ": " + str(EMOJI_IDS.get(k,"YOQ")) for k in _post_keys])
-        await sm(context.bot, uid, "🔍 EMOJI_IDS:\n" + _dbg)
         try:
             if poster: await sp(context.bot, channel, poster, caption, markup)
             else:      await sm(context.bot, channel, caption, markup)
@@ -6697,13 +6187,6 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid   = user.id
     msg   = update.message
     state = context.user_data.get("admin_state")
-
-    # ── ANTI-SPAM (faqat oddiy foydalanuvchilar uchun) ──
-    if not is_any_admin(uid):
-        is_spam, reason = _anti_spam_check(uid)
-        if is_spam:
-            await _apply_spam_action(context.bot, uid, reason)
-            return
 
     if is_any_admin(uid) and state == "broadcast_msg":
         bc = {
@@ -7297,225 +6780,6 @@ async def _checkcard_poll_job(context):
         logger.error(f"_checkcard_poll_job xato: {e}")
 
 
-# ══════════════════════════════════════════════════════════
-# 💎 PREMIUM TARIFLAR — ADMIN PANEL + FOYDALANUVCHI
-# ══════════════════════════════════════════════════════════
-
-async def _send_premium_plans_admin(bot, chat_id: int):
-    """Adminга premium tariflar ro'yxatini ko'rsatadi."""
-    plans = RAM.premium_plans or []
-    if not plans:
-        text = (
-            "💎 <b>Premium tariflar</b>\n\n"
-            "Hozircha hech qanday tarif qo'shilmagan.\n\n"
-            "➕ Yangi tarif qo'shish uchun tugmani bosing:"
-        )
-    else:
-        lines = ["💎 <b>Premium tariflar</b>\n"]
-        for i, p in enumerate(plans, 1):
-            lines.append(
-                f"<b>{i}. {p['name']}</b>\n"
-                f"   ⏳ Muddat: <b>{p['days']} kun</b>\n"
-                f"   💵 Narx: <b>{p['price']:,} so'm</b>\n"
-                f"   📝 {p.get('description') or '—'}\n"
-            )
-        text = "\n".join(lines)
-
-    rows = []
-    for p in plans:
-        rows.append([ibtn(f"🗑 {p['name']} ({p['days']}k) o'chirish",
-                          data=f"del_premium_plan|{p['id']}", style="danger")])
-    rows.append([ibtn("➕ Yangi tarif qo'shish", data="add_premium_plan", style="success")])
-    rows.append([ibtn("🔙 Admin panel", data="go_admin_panel", style="primary")])
-    await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=ikb(rows))
-
-
-def _premium_plans_user_kb(plans: list):
-    """Foydalanuvchiga tariflar ro'yxati — har biri alohida tugma."""
-    rows = []
-    for p in plans:
-        rows.append([ibtn(
-            f"💎 {p['name']} — {p['price']:,} so'm ({p['days']} kun)",
-            data=f"premium_plan_info|{p['id']}"
-        )])
-    rows.append([ibtn("🔙 Yopish", data="premium_plans_close", style="danger")])
-    return ikb(rows)
-
-
-async def cb_premium_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Premium tariflar bilan bog'liq barcha callbacklar."""
-    q   = update.callback_query
-    uid = q.from_user.id
-    data = q.data or ""
-    await q.answer()
-
-    # ── Foydalanuvchiga tariflar ro'yxatini ko'rsat ──
-    if data == "premium_plans_show":
-        plans = RAM.premium_plans or []
-        if not plans:
-            await q.answer("Hozircha premium tariflar mavjud emas!", show_alert=True)
-            return
-        u_data = RAM.ensure_user(uid)
-        prem_until = float(u_data.get("premium_until") or 0)
-        balance    = int(u_data.get("balance") or 0)
-        if prem_until > time.time():
-            import datetime as _dt
-            left_dt = _dt.datetime.fromtimestamp(prem_until)
-            prem_info = f"\n\n✅ Sizda hozir <b>Premium</b> aktiv: <b>{left_dt.strftime('%d.%m.%Y %H:%M')}</b> gacha"
-        else:
-            prem_info = ""
-        text = (
-            f"💎 <b>Premium tariflar</b>{prem_info}\n\n"
-            f"💰 Joriy balansingiz: <b>{balance:,} so'm</b>\n\n"
-            f"Premiumga ega bo'lganingizdan so'ng barcha kinolar <b>bepul</b> ochiladi!\n\n"
-            f"Tarif tanlang 👇"
-        )
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                      reply_markup=_premium_plans_user_kb(plans))
-        except Exception:
-            await context.bot.send_message(uid, text, parse_mode="HTML",
-                                           reply_markup=_premium_plans_user_kb(plans))
-        return
-
-    # ── Tarif haqida ma'lumot ko'rsat ──
-    if data.startswith("premium_plan_info|"):
-        plan_id = data.split("|", 1)[1]
-        plan = next((p for p in RAM.premium_plans if p["id"] == plan_id), None)
-        if not plan:
-            await q.answer("Tarif topilmadi!", show_alert=True)
-            return
-        u_data  = RAM.ensure_user(uid)
-        balance = int(u_data.get("balance") or 0)
-        enough  = balance >= plan["price"]
-        desc    = plan.get("description") or ""
-
-        text = (
-            f"💎 <b>{plan['name']}</b>\n\n"
-            f"⏳ Muddat: <b>{plan['days']} kun</b>\n"
-            f"💵 Narx: <b>{plan['price']:,} so'm</b>\n"
-        )
-        if desc:
-            text += f"📝 {desc}\n"
-        text += (
-            f"\n💰 Joriy balansingiz: <b>{balance:,} so'm</b>\n"
-        )
-        if enough:
-            text += f"\n✅ Balansingiz yetarli!"
-        else:
-            need = plan["price"] - balance
-            text += f"\n❌ Balansingiz yetarli emas. Yana <b>{need:,} so'm</b> kerak."
-
-        rows = []
-        if enough:
-            rows.append([ibtn(f"✅ Sotib olish — {plan['price']:,} so'm",
-                              data=f"premium_plan_buy|{plan_id}", style="success")])
-        rows.append([ibtn("🔙 Orqaga", data="premium_plans_show", style="primary")])
-
-        try:
-            await q.edit_message_text(text, parse_mode="HTML", reply_markup=ikb(rows))
-        except Exception:
-            await context.bot.send_message(uid, text, parse_mode="HTML", reply_markup=ikb(rows))
-        return
-
-    # ── Tarifni sotib olish ──
-    if data.startswith("premium_plan_buy|"):
-        plan_id = data.split("|", 1)[1]
-        plan = next((p for p in RAM.premium_plans if p["id"] == plan_id), None)
-        if not plan:
-            await q.answer("Tarif topilmadi!", show_alert=True)
-            return
-        u_data  = RAM.ensure_user(uid)
-        balance = int(u_data.get("balance") or 0)
-        if balance < plan["price"]:
-            await q.answer("Balansingiz yetarli emas!", show_alert=True)
-            return
-        # Pulni ayiramiz
-        u_data["balance"] = balance - plan["price"]
-        # Premium muddatini qo'shamiz (agar avval ham premium bo'lsa — ustiga qo'shamiz)
-        now = time.time()
-        current_until = float(u_data.get("premium_until") or 0)
-        if current_until > now:
-            new_until = current_until + plan["days"] * 86400
-        else:
-            new_until = now + plan["days"] * 86400
-        u_data["premium_until"] = new_until
-        await save_now()
-
-        import datetime as _dt
-        exp_dt = _dt.datetime.fromtimestamp(new_until)
-        text = (
-            f"🎉 <b>Premium muvaffaqiyatli ulandi!</b>\n\n"
-            f"💎 Tarif: <b>{plan['name']}</b>\n"
-            f"⏳ Muddat: <b>{plan['days']} kun</b>\n"
-            f"📅 Tugash vaqti: <b>{exp_dt.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-            f"💰 Qolgan balans: <b>{u_data['balance']:,} so'm</b>\n\n"
-            f"✅ Endi barcha kinolar <b>bepul</b>! Tomosha qiling! 🎬"
-        )
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                      reply_markup=ikb([[ibtn("🔙 Bosh menyu", data="go_home")]]))
-        except Exception:
-            await context.bot.send_message(uid, text, parse_mode="HTML")
-
-        # Adminga xabar
-        try:
-            u_name = u_data.get("name") or f"ID:{uid}"
-            u_uname = u_data.get("username") or ""
-            adm_txt = (
-                f"💎 <b>Premium sotildi!</b>\n\n"
-                f"👤 {u_name} (@{u_uname} | <code>{uid}</code>)\n"
-                f"📦 Tarif: <b>{plan['name']}</b> — {plan['days']} kun\n"
-                f"💵 To'langan: <b>{plan['price']:,} so'm</b>\n"
-                f"📅 Tugash: <b>{exp_dt.strftime('%d.%m.%Y %H:%M')}</b>"
-            )
-            await context.bot.send_message(ADMIN_ID, adm_txt, parse_mode="HTML")
-        except Exception:
-            pass
-        return
-
-    # ── Tariflar ro'yxatini yopish ──
-    if data == "premium_plans_close":
-        try: await q.delete_message()
-        except Exception: pass
-        return
-
-    # ── Admin: yangi tarif qo'shish ──
-    if data == "add_premium_plan":
-        if not is_any_admin(uid): return
-        context.user_data["admin_state"] = "add_premium_plan_name"
-        try: await q.edit_message_reply_markup(reply_markup=None)
-        except: pass
-        await sm(context.bot, uid,
-            "💎 <b>Yangi premium tarif qo'shish</b>\n\n"
-            "1-qadam: Tarif <b>nomini</b> kiriting (masalan: 1 oylik, 1 haftalik):")
-        return
-
-    # ── Admin: tarif o'chirish ──
-    if data.startswith("del_premium_plan|"):
-        if not is_any_admin(uid): return
-        plan_id = data.split("|", 1)[1]
-        before  = len(RAM.premium_plans)
-        RAM.premium_plans = [p for p in RAM.premium_plans if p["id"] != plan_id]
-        if len(RAM.premium_plans) < before:
-            await save_now()
-            await q.answer("✅ Tarif o'chirildi!")
-        else:
-            await q.answer("❌ Tarif topilmadi!")
-        try: await q.edit_message_reply_markup(reply_markup=None)
-        except: pass
-        await _send_premium_plans_admin(context.bot, uid)
-        return
-
-    # ── Admin panel orqaga ──
-    if data == "go_admin_panel":
-        if not is_any_admin(uid): return
-        try: await q.edit_message_reply_markup(reply_markup=None)
-        except: pass
-        await sm(context.bot, uid, "<b>Admin panel</b>", admin_menu_kb(uid))
-        return
-
-
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN environment o'zgaruvchisi kiritilmagan")
@@ -7532,10 +6796,11 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .read_timeout(30)
-        .write_timeout(30)
-        .connect_timeout(15)
-        .pool_timeout(30)
+        .read_timeout(10)
+        .write_timeout(15)
+        .connect_timeout(8)
+        .pool_timeout(10)
+        .concurrent_updates(True)   # Parallel update ishlash — tezroq javob
         .build()
     )
 
@@ -7593,6 +6858,8 @@ def main():
 
     async def _startup_notify(context_job):
         try:
+            # ✅ Bot username ni startup da cache ga olamiz
+            await _get_bot_username(context_job.bot)
             ok = await asyncio.to_thread(_save_postgres, RAM.to_dict())
             now_str = datetime.now().strftime("%H:%M:%S")
             if ok:
@@ -7615,37 +6882,16 @@ def main():
             logger.warning(f"Startup notify xato: {e}")
 
     if app.job_queue:
-        app.job_queue.run_once(_startup_notify, when=5)
-        app.job_queue.run_repeating(_periodic_sync, interval=120, first=60)
-        logger.info("🔄 Periodik sync yoqildi (har 2 daqiqada)")
-
-    # ── XATO HANDLER — bot o'chmasin ──────────────────────
-    async def error_handler(update, context):
-        import traceback
-        from telegram.error import (NetworkError, TimedOut,
-                                    RetryAfter, TelegramError)
-        err = context.error
-        if isinstance(err, RetryAfter):
-            logger.warning(f"⏳ RetryAfter: {err.retry_after}s kutamiz")
-            await asyncio.sleep(err.retry_after)
-        elif isinstance(err, (NetworkError, TimedOut)):
-            logger.warning(f"🌐 Tarmoq xatosi — qayta ulaniladi: {err}")
-            await asyncio.sleep(5)
-        elif isinstance(err, TelegramError):
-            logger.error(f"❌ Telegram xatosi: {err}")
-        else:
-            logger.error(f"❌ Kutilmagan xato: {err}\n{traceback.format_exc()}")
-
-    app.add_error_handler(error_handler)
+        app.job_queue.run_once(_startup_notify, when=3)
+        app.job_queue.run_repeating(_periodic_sync, interval=300, first=90)
+        logger.info("🔄 Periodik sync yoqildi (har 5 daqiqada)")
 
     logger.info(f"🚀 Bot v20 Railway ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query", "chat_join_request"],
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=15,
-        pool_timeout=30,
+        poll_interval=0.5,      # Default 0.0 — CPU band, 0.5 optimal
+        timeout=10,             # Long-polling timeout (default 0)
     )
 
 
