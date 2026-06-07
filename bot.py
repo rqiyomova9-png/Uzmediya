@@ -1171,6 +1171,10 @@ def register_user(user):
 _sub_cache: dict[int, tuple[float, list]] = {}
 SUB_CACHE_TTL = 120  # 10 dan 120 ga oshirildi — tezroq javob
 
+# "Majburiy kanal" xabari spam oldini olish — {uid: last_sent_timestamp}
+_sub_msg_sent: dict[int, float] = {}
+SUB_MSG_COOLDOWN = 30  # 30 soniyada faqat 1 marta "Majburiy kanal" xabari
+
 def _sub_cache_get(user_id):
     e = _sub_cache.get(user_id)
     if e and (time.time() - e[0]) < SUB_CACHE_TTL:
@@ -1182,6 +1186,16 @@ def _sub_cache_set(user_id, result):
 
 def _sub_cache_invalidate(user_id):
     _sub_cache.pop(user_id, None)
+    _sub_msg_sent.pop(user_id, None)
+
+def _sub_msg_can_send(user_id: int) -> bool:
+    """True qaytarsa — xabar yuborish mumkin. False = spam, o'tkazib yuborish."""
+    now = time.time()
+    last = _sub_msg_sent.get(user_id, 0)
+    if now - last < SUB_MSG_COOLDOWN:
+        return False
+    _sub_msg_sent[user_id] = now
+    return True
 
 
 # ══════════════════════════════════════════════════════════
@@ -2695,19 +2709,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ns   = await check_subscription(user.id, context.bot)
         if ns:
             context.user_data["pending_code"] = code
-            await sm(context.bot, user.id,
-                "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
-                subscription_kb(ns, simple_links=RAM.simple_links))
+            if _sub_msg_can_send(user.id):
+                await sm(context.bot, user.id,
+                    "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                    subscription_kb(ns, simple_links=RAM.simple_links))
             return
         await send_movie_menu(update, context, code)
         return
 
     ns = await check_subscription(user.id, context.bot)
     if ns:
-        await sm(context.bot, user.id,
-            "⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling 👇\n"
-            "Obuna bo'lgach <b>Tekshirish</b> tugmasini bosing.",
-            subscription_kb(ns, simple_links=RAM.simple_links))
+        if _sub_msg_can_send(user.id):
+            await sm(context.bot, user.id,
+                "⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling 👇\n"
+                "Obuna bo'lgach <b>Tekshirish</b> tugmasini bosing.",
+                subscription_kb(ns, simple_links=RAM.simple_links))
         return
 
     # ── Admin tomonidan o'rnatilgan custom start xabari (rasm + matn + premium emoji) ──
@@ -3539,6 +3555,7 @@ async def cb_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    await q.answer()
     parts = q.data.split("|")
     if len(parts) != 3: return
     _, code, page_str = parts
@@ -3554,10 +3571,27 @@ async def cb_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"📺 Qismlar soni: <b>{len(eps)} ta</b>  "
                    f"({page + 1}/{total_pages} sahifa)\n\n"
                    f"👇 Qaysi qismni ko'rmoqchisiz?")
-    try: await q.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=markup)
-    except:
-        try: await q.edit_message_text(caption, parse_mode="HTML", reply_markup=markup)
-        except Exception as e: logger.error(f"cb_page xato: {e}")
+    msg = q.message
+
+    # Xabar turi bo'yicha to'g'ri usulni tanlaymiz
+    has_caption = bool(getattr(msg, "caption", None) or getattr(msg, "photo", None)
+                       or getattr(msg, "video", None) or getattr(msg, "document", None))
+    try:
+        if has_caption:
+            await q.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=markup)
+        else:
+            await q.edit_message_text(caption, parse_mode="HTML", reply_markup=markup)
+    except Exception as e:
+        err = str(e).lower()
+        # "message is not modified" — xato emas, o'tkazib yuboramiz
+        if "not modified" in err:
+            return
+        # Boshqa xatolar — yangi xabar yuboramiz
+        logger.warning(f"cb_page edit xatosi, yangi xabar yuborilmoqda: {e}")
+        try:
+            await sm(context.bot, user_id, caption, markup)
+        except Exception as e2:
+            logger.error(f"cb_page fallback xato: {e2}")
 
 
 # ══════════════════════════════════════════════════════════
@@ -3997,9 +4031,53 @@ def _get_admin_reserved_texts() -> set:
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_duplicate_update(update): return
     user = update.effective_user
+
+    # ── SUNIY ODAM (BOT) TEKSHIRUVI ──
+    if getattr(user, "is_bot", False):
+        register_user(user)  # auto-block
+        return
+
     uid  = user.id
     msg  = update.message
     text = (msg.text or "").strip()
+
+    # ── NOQONUNIY KONTENT FILTRI ──────────────────────────
+    # Bot faqat kino/drama xizmatini ko'rsatadi.
+    # Quyidagi so'zlar aniqlansa — xabar rad etiladi va admin ogohlantiriladi.
+    _BANNED_KEYWORDS = [
+        # Zo'ravonlik / tahdid
+        "qotillik", "o'ldirish", "o'ldur", "portlatish", "bomba", "qurol yasash",
+        # Narkotik
+        "giyohvand", "narkotik", "kokain", "mefedron", "nasha",
+        # Shaxsiy ma'lumot o'g'irlash
+        "parol ber", "karta raqam ber", "bank kod", "sms kod ber",
+        # Spam / reklama
+        "click here to earn", "free money", "crypto earn",
+    ]
+    text_lower = text.lower()
+    if not is_any_admin(uid):
+        for kw in _BANNED_KEYWORDS:
+            if kw in text_lower:
+                logger.warning(f"🚨 Noqonuniy kontent aniqlandi: uid={uid}, so'z='{kw}'")
+                try:
+                    await context.bot.send_message(
+                        uid,
+                        "🚫 Bu turdagi xabarlar botimizda taqiqlanган.\n"
+                        "Faqat kino/drama haqida murojaat qiling.",
+                        parse_mode="HTML"
+                    )
+                    # Admin ogohlantiriladi
+                    u_data = RAM.users.get(str(uid), {})
+                    await context.bot.send_message(
+                        ADMIN_ID,
+                        f"🚨 <b>Taqiqlangan kontent!</b>\n\n"
+                        f"👤 {u_data.get('name', '?')} (@{u_data.get('username', '')} | <code>{uid}</code>)\n"
+                        f"📝 Xabar: <code>{text[:200]}</code>",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+                return
 
     # ── Bloklangan foydalanuvchi — hech narsa qilmaymiz ──
     if is_blocked_user(uid) and not is_any_admin(uid):
@@ -4493,9 +4571,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ns = await check_subscription(uid, context.bot)
         if ns:
             context.user_data["pending_code"] = code
-            await sm(context.bot, uid,
-                "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
-                subscription_kb(ns, simple_links=RAM.simple_links))
+            if _sub_msg_can_send(uid):
+                await sm(context.bot, uid,
+                    "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                    subscription_kb(ns, simple_links=RAM.simple_links))
             return
         await send_movie_menu(update, context, code)
     elif matches:
