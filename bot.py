@@ -37,8 +37,8 @@ JSONBLOB_URL      = ""   # O'chirildi — PostgreSQL ishlatilmoqda
 GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Lodn9MTb7nysq5l80cQVCu9IKfgQRlnNe654PT0hKQs"
 
 # ─── CHECKCARD API KONFIGURATSIYASI ─────────────────────────
-CHECKCARD_SHOP_ID  = os.environ.get("CHECKCARD_SHOP_ID")  or "249444"
-CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "ZB3GJ99FI5"
+CHECKCARD_SHOP_ID  = os.environ.get("CHECKCARD_SHOP_ID")  or "924672"
+CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "DSSD85MU60"
 CHECKCARD_BASE_URL = "https://checkcard.uz/api"
 
 # ─── RAILWAY / WEBHOOK KONFIGURATSIYASI ─────────────────────
