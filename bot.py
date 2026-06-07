@@ -784,7 +784,7 @@ def _pg_init_table():
         return False
 
 
-def _save_postgres(data: dict, retries: int = 3) -> bool:
+def _save_postgres(data: dict, retries: int = 2) -> bool:
     """PostgreSQL ga saqlaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return False
@@ -816,7 +816,7 @@ def _save_postgres(data: dict, retries: int = 3) -> bool:
                 try: conn.close()
                 except: pass
         if attempt < retries - 1:
-            time.sleep(3 * (attempt + 1))
+            time.sleep(1)   # ⚡ 3s o'rniga 1s — bot bloklanmasin
     return False
 
 
@@ -824,7 +824,7 @@ def _load_postgres() -> dict | None:
     """PostgreSQL dan yuklaydi."""
     if not DATABASE_URL or not PSYCOPG2_AVAILABLE:
         return None
-    for attempt in range(6):
+    for attempt in range(3):   # 6→3 urinish
         conn = None
         try:
             conn = _get_pg_conn()
@@ -854,9 +854,9 @@ def _load_postgres() -> dict | None:
             if conn:
                 try: conn.close()
                 except: pass
-        if attempt < 5:
-            time.sleep(2 * (attempt + 1))
-    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (6 urinish).")
+        if attempt < 2:
+            time.sleep(2)   # ⚡ 2*(n+1) o'rniga flat 2s
+    logger.error("❌ PostgreSQL dan yuklab bo'lmadi (3 urinish).")
     return None
 
 
@@ -1350,7 +1350,7 @@ def register_user(user):
 # ══════════════════════════════════════════════════════════
 
 _sub_cache: dict[int, tuple[float, list]] = {}
-SUB_CACHE_TTL = 10
+SUB_CACHE_TTL = 120   # ⚡ 10s → 2 daqiqa — Telegram API yukini kamaytiradi
 
 def _sub_cache_get(user_id):
     e = _sub_cache.get(user_id)
@@ -7026,11 +7026,20 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             body   = self.rfile.read(length)
             data   = json.loads(body.decode("utf-8"))
             logger.info(f"📩 CheckCard webhook keldi: {data}")
-            # Async handler ni event loop orqali chaqiramiz
-            import asyncio
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(_handle_checkcard_webhook(data))
-            loop.close()
+            # Async handler ni asosiy event loop orqali chaqiramiz
+            # (yangi loop yaratish o'rniga — thread-safe usuli)
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        _handle_checkcard_webhook(data), loop
+                    )
+                else:
+                    loop.run_until_complete(_handle_checkcard_webhook(data))
+            except RuntimeError:
+                new_loop = asyncio.new_event_loop()
+                new_loop.run_until_complete(_handle_checkcard_webhook(data))
+                new_loop.close()
         except Exception as e:
             logger.error(f"Webhook handler xato: {e}")
         self.send_response(200)
@@ -7155,6 +7164,7 @@ def _start_health_server():
     port = int(os.environ.get("PORT", 8080))
     try:
         server = HTTPServer(("0.0.0.0", port), _WebhookHandler)
+        server.timeout = 10   # ⚡ stuck connection uchun timeout
         t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
         logger.info(f"✅ Railway webhook server port {port} da ishga tushdi")
@@ -7534,7 +7544,7 @@ def main():
         .token(BOT_TOKEN)
         .read_timeout(30)
         .write_timeout(30)
-        .connect_timeout(15)
+        .connect_timeout(30)   # ⚡ 15→30s — Railway cold start uchun
         .pool_timeout(30)
         .build()
     )
@@ -7593,6 +7603,7 @@ def main():
 
     async def _startup_notify(context_job):
         try:
+            # PostgreSQL ga fon rejimida yozamiz — bot bloklanmasin
             ok = await asyncio.to_thread(_save_postgres, RAM.to_dict())
             now_str = datetime.now().strftime("%H:%M:%S")
             if ok:
@@ -7604,7 +7615,7 @@ def main():
             webhook_url = f"{RAILWAY_URL}{CHECKCARD_WEBHOOK_PATH}"
             await context_job.bot.send_message(
                 ADMIN_ID,
-                f"🚀 <b>Bot v20 Railway da ishga tushdi!</b>\n\n"
+                f"🚀 <b>Bot v22 Railway da ishga tushdi!</b>\n\n"
                 f"💾 RAM: <b>{len(RAM.movies)}</b> kino, <b>{len(RAM.users)}</b> user\n"
                 f"📦 Storage: {storage_msg}\n\n"
                 f"💳 CheckCard Webhook URL:\n<code>{webhook_url}</code>\n"
@@ -7644,7 +7655,7 @@ def main():
         allowed_updates=["message", "callback_query", "chat_join_request"],
         read_timeout=30,
         write_timeout=30,
-        connect_timeout=15,
+        connect_timeout=30,   # ⚡ 15→30s
         pool_timeout=30,
     )
 
