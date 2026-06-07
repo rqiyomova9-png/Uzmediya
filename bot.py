@@ -3190,7 +3190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # "Qo'llanma" tugmasi — doim ko'rinadi, mini ilova ochadi
     start_inline_rows.append([
-        ibtn(bt("install"), url="https://www.youtube.com/@DramlarUz",
+        ibtn(bt("install"), url="https://youtube.com/shorts/WhwoB-mozpY?si=VVworRk1W7G3MUOj",
              style="success", emoji_id=get_eid("install"))
     ])
 
