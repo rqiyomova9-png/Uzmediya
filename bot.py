@@ -4108,9 +4108,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text_p = strip_emoji_prefix(text).strip().lower()
         maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
 
-        # "Majburiy kanal" tugmasi bosildi → menyuni ko'rsat
+        # "Majburiy kanal" tugmasi bosildi → BARCHA holatlarni tozalab menyuni ko'rsat
         if text_p == maj_p or from_bold(text).lower() == from_bold(bt("maj_kanal")).lower():
+            # Barcha state va flaglarni tozalaymiz
             clear_admin_state(context)
+            context.user_data.pop("emoji_menu", None)
+            context.user_data.pop("editing_btn_key", None)
+            context.user_data.pop("bc_adding_btn", None)
+            context.user_data.pop("bc_msg", None)
+            context.user_data.pop("reply_to", None)
+            context.user_data.pop("awaiting_help", None)
             context.user_data["channel_manage_menu"] = True
             await sm(context.bot, uid,
                 f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
@@ -4318,6 +4325,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── 1. editing_btn_key ─────────────────────────────
     if is_any_admin(uid) and context.user_data.get("editing_btn_key"):
+        # maj_kanal tugmasi har qanday holatda ham ishlashi kerak
+        _ek_text_p = strip_emoji_prefix(text).strip().lower()
+        _ek_maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
+        if _ek_text_p == _ek_maj_p:
+            context.user_data.pop("editing_btn_key", None)
+            context.user_data.pop("emoji_menu", None)
+            clear_admin_state(context)
+            context.user_data["channel_manage_menu"] = True
+            await sm(context.bot, uid,
+                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
+                channel_manage_kb())
+            return
         key = context.user_data.pop("editing_btn_key")
         if not text:
             context.user_data["editing_btn_key"] = key
@@ -4391,6 +4410,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── 3. Emoji menyu ──────────────────────────────────
     if is_any_admin(uid) and context.user_data.get("emoji_menu"):
+        # maj_kanal tugmasi emoji menyusida ham ishlashi kerak
+        _em_text_p = strip_emoji_prefix(text).strip().lower()
+        _em_maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
+        if _em_text_p == _em_maj_p:
+            context.user_data.pop("emoji_menu", None)
+            context.user_data.pop("editing_btn_key", None)
+            clear_admin_state(context)
+            context.user_data["channel_manage_menu"] = True
+            await sm(context.bot, uid,
+                f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nQuyidagi tugmalardan birini tanlang:",
+                channel_manage_kb())
+            return
         if text == bt("orqaga") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("orqaga")):
             context.user_data.pop("emoji_menu", None)
             context.user_data.pop("editing_btn_key", None)
