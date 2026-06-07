@@ -432,6 +432,17 @@ def to_bold(text: str) -> str:
         else:                  result.append(ch)
     return ''.join(result)
 
+def from_bold(text: str) -> str:
+    """Unicode bold harflarni oddiy ASCII harflarga aylantiradi."""
+    result = []
+    for ch in text:
+        cp = ord(ch)
+        if 0x1D5D4 <= cp <= 0x1D5ED:   result.append(chr(cp - 0x1D5D4 + ord('A')))
+        elif 0x1D5EE <= cp <= 0x1D607: result.append(chr(cp - 0x1D5EE + ord('a')))
+        elif 0x1D7EC <= cp <= 0x1D7F5: result.append(chr(cp - 0x1D7EC + ord('0')))
+        else:                           result.append(ch)
+    return ''.join(result)
+
 _B = to_bold
 
 # ─── BUTTON TEXTS ──────────────────────────────────────────
@@ -1220,10 +1231,11 @@ def extract_emoji_prefix(text: str) -> str:
     return match.group(1).rstrip() if match else ""
 
 def strip_emoji_prefix(text: str) -> str:
-    return re.sub(
+    text = re.sub(
         r'^(?:[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE00-\uFE0F\u200d\ufe0f]+\s*)+',
         '', text
     ).strip()
+    return from_bold(text)
 
 def extract_custom_emoji_id(message) -> str | None:
     if not message or not message.entities:
@@ -4097,7 +4109,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         maj_p  = strip_emoji_prefix(bt("maj_kanal")).strip().lower()
 
         # "Majburiy kanal" tugmasi bosildi → menyuni ko'rsat
-        if text_p == maj_p or text.lower() == bt("maj_kanal").lower():
+        if text_p == maj_p or from_bold(text).lower() == from_bold(bt("maj_kanal")).lower():
             clear_admin_state(context)
             context.user_data["channel_manage_menu"] = True
             await sm(context.bot, uid,
