@@ -42,7 +42,7 @@ CHECKCARD_SHOP_KEY = os.environ.get("CHECKCARD_SHOP_KEY") or "DSSD85MU60"
 CHECKCARD_BASE_URL = "https://checkcard.uz/api"
 
 # ─── RAILWAY / WEBHOOK KONFIGURATSIYASI ─────────────────────
-RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://dramlaruz-production.up.railway.app/checkcard_webhook"
+RAILWAY_URL = os.environ.get("RAILWAY_URL") or "https://uzmediya-production.up.railway.app"
 CHECKCARD_WEBHOOK_PATH = "/checkcard_webhook"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
