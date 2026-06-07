@@ -4466,6 +4466,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if key == "emoji_soz":
                 clear_admin_state(context)
                 context.user_data["emoji_menu"] = True
+                context.user_data.pop("channel_manage_menu", None)
                 await sm(context.bot, uid,
                     "<b>Tugma sozlamalari</b>\nO'zgartirmoqchi bo'lgan tugmani pastdan tanlang 👇",
                     emoji_menu_kb())
@@ -4500,6 +4501,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             context.user_data.pop("emoji_menu", None)
             context.user_data.pop("editing_btn_key", None)
+            # maj_kanal emas bo'lsa — channel_manage_menu ni tozalaymiz
+            if key != "maj_kanal":
+                context.user_data.pop("channel_manage_menu", None)
             await admin_buttons(update, context, bt(key))
             return
 
@@ -4811,6 +4815,8 @@ async def admin_buttons(update, context, text: str):
 
     if _btn_match("maj_kanal"):
         context.user_data.pop("admin_state", None)
+        context.user_data.pop("emoji_menu", None)        # ← emoji_menu tozalaymiz
+        context.user_data.pop("editing_btn_key", None)   # ← editing state ham
         context.user_data["channel_manage_menu"] = True
         await sm(context.bot, uid,
             f"📡 <b>Majburiy kanal boshqaruvi</b>\n\n{_channels_list_text()}\n\nNima qilmoqchisiz?",
