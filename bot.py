@@ -656,6 +656,7 @@ DEFAULT_BTN = {
     "premium_plan_manage": _B("💎 Pryum tariflar"),
     "referral_narxi":     _B("Referral narxi"),
     "dost_taklif":        _B("Do'st taklif qilish"),
+    "top_referrers":      _B("🏆 Referral yiqanlar"),
     "post_nomi":          "🎭",
     "post_qism":          "🎞",
     "post_kod":           "🔑",
@@ -733,6 +734,7 @@ BTN_LABELS["kanal_btn"]    = "Kanal tugmasi"
 BTN_LABELS["premium_plan_manage"] = "Pryum tariflar boshqaruvi"
 BTN_LABELS["referral_narxi"]     = "Referral narxi"
 BTN_LABELS["dost_taklif"]      = "Do'st taklif qilish"
+BTN_LABELS["top_referrers"]    = "🏆 Referral yiqanlar"
 LABEL_TO_KEY = {v: k for k, v in BTN_LABELS.items()}
 
 # ══════════════════════════════════════════════════════════
@@ -1604,6 +1606,7 @@ def admin_menu_kb(uid=None):
         ("foydalanuvchi_blok", "danger"),
         ("premium_plan_manage", "success"),
         ("referral_narxi", "primary"),
+        ("top_referrers",  "success"),
     ]
     if uid is not None and not is_super_admin(uid):
         pairs = [(k, st) for (k, st) in pairs if has_perm(uid, k)]
@@ -5124,7 +5127,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_earn  = int(u_data.get("referral_earnings") or 0)
         name      = user_obj.full_name or "Noma'lum"
         txt = (
-            f"💰 <b>Balansingiz</b>\n\n"
+            f'<tg-emoji emoji-id="5228841963817570494">💰</tg-emoji> <b>Balansingiz</b>\n\n'
             f"👤 Ism: <b>{name}</b>\n"
             f"🆔 ID: <code>{uid}</code>\n\n"
             f"💵 Joriy balans: <b>{balance:,} so'm</b>\n"
@@ -5319,6 +5322,37 @@ async def admin_buttons(update, context, text: str):
             f"🎁 <b>Referral narxini o'zgartirish</b>\n\n"
             f"Hozirgi referral mukofoti: <b>{cur:,} so'm</b>\n\n"
             f"Yangi miqdorni kiriting (faqat raqam):")
+        return
+
+    if _btn_match("top_referrers"):
+        if not is_any_admin(uid): return
+        # Top 15 referral yig'ganlar
+        scored = []
+        for u_id_str, u_data in RAM.users.items():
+            ref_count = len(u_data.get("referred_users") or [])
+            if ref_count > 0:
+                scored.append((u_id_str, u_data, ref_count))
+        scored.sort(key=lambda x: x[2], reverse=True)
+        top = scored[:15]
+        if not top:
+            await sm(context.bot, uid,
+                "📭 <b>Hali hech kim referral yig'magan.</b>", admin_menu_kb(uid))
+            return
+        lines = ["🏆 <b>Referral yig'ganlar — Top 15</b>\n"]
+        medals = ["🥇","🥈","🥉"] + ["🏅"]*12
+        for i, (u_id_str, u_data, ref_count) in enumerate(top):
+            name   = u_data.get("name") or u_data.get("first_name") or f"ID:{u_id_str}"
+            uname  = u_data.get("username") or ""
+            uname_txt = f"@{uname}" if uname else "—"
+            earnings = int(u_data.get("referral_earnings") or 0)
+            lines.append(
+                f"{medals[i]} <b>{i+1}.</b> {name}\n"
+                f"   👤 {uname_txt}  |  🆔 <code>{u_id_str}</code>\n"
+                f"   👥 Yig'ganlar: <b>{ref_count} ta</b>  |  💰 <b>{earnings:,} so'm</b>"
+            )
+        await sm(context.bot, uid, "\n".join(lines),
+                 ikb([[ibtn("🔄 Yangilash", data="top_ref_refresh", style="primary"),
+                       ibtn("⬅️ Orqaga",   data="go_admin_panel",  style="success")]]))
         return
 
     if _btn_match("karta"):
@@ -7787,6 +7821,40 @@ async def cb_premium_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await q.edit_message_reply_markup(reply_markup=None)
         except: pass
         await sm(context.bot, uid, "<b>Admin panel</b>", admin_menu_kb(uid))
+        return
+
+    # ── Top referral yig'ganlar yangilash ──
+    if data == "top_ref_refresh":
+        if not is_any_admin(uid): return
+        scored = []
+        for u_id_str, u_data in RAM.users.items():
+            ref_count = len(u_data.get("referred_users") or [])
+            if ref_count > 0:
+                scored.append((u_id_str, u_data, ref_count))
+        scored.sort(key=lambda x: x[2], reverse=True)
+        top = scored[:15]
+        if not top:
+            try: await q.edit_message_text("📭 <b>Hali hech kim referral yig'magan.</b>", parse_mode="HTML")
+            except: pass
+            return
+        lines = ["🏆 <b>Referral yig'ganlar — Top 15</b>\n"]
+        medals = ["🥇","🥈","🥉"] + ["🏅"]*12
+        for i, (u_id_str, u_data, ref_count) in enumerate(top):
+            name   = u_data.get("name") or u_data.get("first_name") or f"ID:{u_id_str}"
+            uname  = u_data.get("username") or ""
+            uname_txt = f"@{uname}" if uname else "—"
+            earnings = int(u_data.get("referral_earnings") or 0)
+            lines.append(
+                f"{medals[i]} <b>{i+1}.</b> {name}\n"
+                f"   👤 {uname_txt}  |  🆔 <code>{u_id_str}</code>\n"
+                f"   👥 Yig'ganlar: <b>{ref_count} ta</b>  |  💰 <b>{earnings:,} so'm</b>"
+            )
+        new_text = "\n".join(lines)
+        new_kb = ikb([[ibtn("🔄 Yangilash", data="top_ref_refresh", style="primary"),
+                       ibtn("⬅️ Orqaga",   data="go_admin_panel",  style="success")]])
+        try: await q.edit_message_text(new_text, parse_mode="HTML", reply_markup=new_kb)
+        except: pass
+        await q.answer("✅ Yangilandi!")
         return
 
 
