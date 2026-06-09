@@ -608,6 +608,7 @@ DEFAULT_BTN = {
     "kanal_post":     _B('Kanalga post'),
     "maj_kanal":      _B('Majburiy kanal'),
     "karta":          _B('Karta raqami'),
+    "ilova":          _B('Bot qollanma video'),
     "emoji_soz":      _B('Emoji sozlamalari'),
     "asosiy":         _B('Asosiy menyu'),
     "boshqarish":     _B('Boshqarish'),
@@ -641,6 +642,7 @@ DEFAULT_BTN = {
     "soruvli_kanal":  _B("So'rovli kanal qo'shish"),
     "qism_tahrir":    _B('Qismlarni tahrirlash'),
     "admin_qosh":     _B('Admin qoshish'),
+    "admin_lichka_set": _B("👤 Admin lichkasini qo'shish"),
     "qism_och":       _B("Qism ochish"),
     "premium_ber":    _B('Premium berish'),
     "start_xab":      _B('Start xabarni ozgartirish'),
@@ -676,6 +678,7 @@ BTN_LABELS = {
     "kanal_post":    "Kanalga post",
     "maj_kanal":     "Majburiy kanal",
     "karta":         "Karta raqami",
+    "ilova":         "Bot qo'llanma video",
     "emoji_soz":     "Emoji sozlamalari",
     "asosiy":        "Asosiy menyu",
     "boshqarish":    "⚙️ Boshqarish",
@@ -712,6 +715,7 @@ BTN_LABELS["soruvli_kanal"] = "So'rovli kanal qo'shish"
 BTN_LABELS["admin_panel"]  = "Admin panel (orqaga)"
 BTN_LABELS["qism_tahrir"]  = "Qismlarni tahrirlash"
 BTN_LABELS["admin_qosh"]   = "Admin qo'shish"
+BTN_LABELS["admin_lichka_set"] = "Admin lichkasini qo'shish"
 BTN_LABELS["qism_och"]    = "Qism ochish"
 BTN_LABELS["premium_ber"]  = "Premium berish"
 BTN_LABELS["start_xab"]    = "Start xabarni o'zgartirish"
@@ -1588,6 +1592,7 @@ def admin_menu_kb(uid=None):
         ("kanal_post",     "primary"),
         ("maj_kanal",      "danger"),
         ("karta",          "success"),
+        ("ilova",          "primary"),
         ("kino_kanal_set", "success"),
         ("emoji_soz",      "primary"),
         ("qism_tahrir",    "primary"),
@@ -1610,6 +1615,7 @@ def admin_menu_kb(uid=None):
     if buf: rows.append(buf)
     if uid is None or is_super_admin(uid):
         rows.append([rbtn(bt("admin_qosh"), style="success", emoji_id=get_eid("admin_qosh"))])
+        rows.append([rbtn(bt("admin_lichka_set"), style="primary")])
     rows.append([rbtn(bt("asosiy"), style="success", emoji_id=get_eid("asosiy"))])
     return rkb(rows)
 
@@ -4982,11 +4988,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_any_admin(uid):
         all_admin_btn_keys = [
             "kino_joy", "qism_qosh", "pullik", "stat",
-            "kanal_post", "maj_kanal", "karta",
+            "kanal_post", "maj_kanal", "karta", "ilova",
             "emoji_soz", "asosiy", "boshqarish", "broadcast", "kino_uch",
             "kino_kanal_set", "qism_tahrir", "admin_qosh",
             "premium_ber", "start_xab", "qism_och", "foydalanuvchi_blok",
             "tolovlar", "premium_plan_manage", "referral_narxi",
+            "admin_lichka_set",
         ]
         # Ham to'liq matn, ham emoji-siz matn bilan tekshiramiz
         all_admin_btns = {}
@@ -5007,6 +5014,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             if key == "admin_qosh" and not is_super_admin(uid):
                 await sm(context.bot, uid, "⛔ Faqat asosiy admin yangi admin qo'sha oladi.", admin_menu_kb(uid))
+                return
+            if key == "admin_lichka_set":
+                if not is_super_admin(uid):
+                    await sm(context.bot, uid, "⛔ Faqat asosiy admin lichka o'rnatishi mumkin.", admin_menu_kb(uid))
+                    return
+                clear_admin_state(context)
+                context.user_data.pop("emoji_menu", None)
+                context.user_data["admin_state"] = "set_admin_lichka"
+                cur_lichka = (RAM.settings.get("admin_lichka") or "").strip()
+                cur_info = f"\n\nJoriy admin username: <code>@{cur_lichka}</code>" if cur_lichka else "\n\n<i>Hali o'rnatilmagan</i>"
+                await sm(context.bot, uid,
+                    f"👤 <b>Admin lichkasini qo'shish / o'chirish</b>{cur_info}\n\n"
+                    f"Admin <b>@username</b>ini kiriting\n"
+                    f"<i>O'chirish uchun <code>0</code> kiriting</i>")
                 return
             if key == "emoji_soz":
                 clear_admin_state(context)
@@ -5306,6 +5327,15 @@ async def admin_buttons(update, context, text: str):
         await sm(context.bot, uid, f"Joriy karta: <code>{cur}</code>\n\nYangi karta raqamini yuboring:")
         return
 
+    if _btn_match("ilova"):
+        context.user_data["admin_state"] = "set_install"
+        await sm(context.bot, uid,
+            "📹 <b>Bot qo'llanma videosi</b>\n\n"
+            "Video yuboring. Video <b>captioniga</b> izoh yozsangiz — start menyuda "
+            "shu izoh ko'rsatiladi.\n\n"
+            "<i>Faqat video qabul qilinadi.</i>")
+        return
+
     if _btn_match("kino_joy"):
         context.user_data["admin_state"] = "add_movie_code"
         context.user_data.pop("ep_movie_code", None)   # ✅ Eski qism state ni tozala
@@ -5593,6 +5623,25 @@ async def admin_state_handler(update, context, text: str) -> bool:
         await schedule_save()
         context.user_data.pop("admin_state", None)
         await sm(context.bot, uid, f"✅ Karta saqlandi: <code>{text}</code>", admin_menu_kb(uid))
+        return True
+
+    if state == "set_admin_lichka":
+        val = text.strip().lstrip("@")
+        if val == "0":
+            RAM.settings["admin_lichka"] = ""
+            asyncio.create_task(save_now())
+            context.user_data.pop("admin_state", None)
+            await sm(context.bot, uid, "✅ Admin lichkasi o'chirildi.", admin_menu_kb(uid))
+        elif val:
+            RAM.settings["admin_lichka"] = val
+            asyncio.create_task(save_now())
+            context.user_data.pop("admin_state", None)
+            await sm(context.bot, uid,
+                f"✅ Admin lichkasi saqlandi: <code>@{val}</code>\n\n"
+                f"Endi «Qo'llanma video» tugmasida 👤 <b>Admin lichkasi</b> tugmasi ko'rinadi.",
+                admin_menu_kb(uid))
+        else:
+            await sm(context.bot, uid, "⚠️ Username kiriting (masalan: @username) yoki o'chirish uchun <code>0</code>:")
         return True
 
     if state == "set_kino_kanal":
