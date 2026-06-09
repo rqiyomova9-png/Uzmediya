@@ -30,7 +30,7 @@ from telegram.ext import (
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or ""
-ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
+ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
 
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
 JSONBLOB_URL      = ""   # O'chirildi — PostgreSQL ishlatilmoqda
@@ -1183,8 +1183,8 @@ def save_sync():
 
 async def save_now() -> bool:
     """
-    DARHOL saqlash — kutilayotgan debounce taymerni bekor qiladi va
-    JSONBlob ga shu lahzada yozadi. Muhim operatsiyalar uchun.
+    DARHOL saqlash — lokal faylga sinxron, JSONBlob ga fon rejimida.
+    Bot javob berishni kutmaydi — sekinlashmaydi.
     """
     global _jsonblob_timer_task
     if _jsonblob_timer_task and not _jsonblob_timer_task.done():
@@ -1193,7 +1193,9 @@ async def save_now() -> bool:
         _save_local(RAM.to_dict())
     except Exception as e:
         logger.error(f"Lokal saqlash xato: {e}")
-    return await _do_jsonblob_save()
+    # JSONBlob ga fon rejimida yozamiz — bot kutmaydi
+    asyncio.create_task(_do_jsonblob_save())
+    return True
 
 
 async def save_ram_only():
@@ -5326,7 +5328,6 @@ async def admin_buttons(update, context, text: str):
 
     if _btn_match("top_referrers"):
         if not is_any_admin(uid): return
-        # Top 15 referral yig'ganlar
         scored = []
         for u_id_str, u_data in RAM.users.items():
             ref_count = len(u_data.get("referred_users") or [])
@@ -5338,8 +5339,11 @@ async def admin_buttons(update, context, text: str):
             await sm(context.bot, uid,
                 "📭 <b>Hali hech kim referral yig'magan.</b>", admin_menu_kb(uid))
             return
-        lines = ["🏆 <b>Referral yig'ganlar — Top 15</b>\n"]
-        medals = ["🥇","🥈","🥉"] + ["🏅"]*12
+        lines = ['<tg-emoji emoji-id="5226431245918942763">🏆</tg-emoji> <b>Referral yig\'ganlar — Top 15</b>\n']
+        medals = [
+            '<tg-emoji emoji-id="5469896127132231345">🥇</tg-emoji>',
+            "🥈","🥉"
+        ] + ["🏅"]*12
         for i, (u_id_str, u_data, ref_count) in enumerate(top):
             name   = u_data.get("name") or u_data.get("first_name") or f"ID:{u_id_str}"
             uname  = u_data.get("username") or ""
@@ -5347,8 +5351,8 @@ async def admin_buttons(update, context, text: str):
             earnings = int(u_data.get("referral_earnings") or 0)
             lines.append(
                 f"{medals[i]} <b>{i+1}.</b> {name}\n"
-                f"   👤 {uname_txt}  |  🆔 <code>{u_id_str}</code>\n"
-                f"   👥 Yig'ganlar: <b>{ref_count} ta</b>  |  💰 <b>{earnings:,} so'm</b>"
+                f'   <tg-emoji emoji-id="5818715087237549366">👤</tg-emoji> {uname_txt}  |  <tg-emoji emoji-id="5818885490065017876">🆔</tg-emoji> <code>{u_id_str}</code>\n'
+                f'   <tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Yig\'ganlar: <b>{ref_count} ta</b>  |  <tg-emoji emoji-id="5228841963817570494">💰</tg-emoji> <b>{earnings:,} so\'m</b>'
             )
         await sm(context.bot, uid, "\n".join(lines),
                  ikb([[ibtn("🔄 Yangilash", data="top_ref_refresh", style="primary"),
@@ -7837,8 +7841,11 @@ async def cb_premium_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await q.edit_message_text("📭 <b>Hali hech kim referral yig'magan.</b>", parse_mode="HTML")
             except: pass
             return
-        lines = ["🏆 <b>Referral yig'ganlar — Top 15</b>\n"]
-        medals = ["🥇","🥈","🥉"] + ["🏅"]*12
+        lines = ['<tg-emoji emoji-id="5226431245918942763">🏆</tg-emoji> <b>Referral yig\'ganlar — Top 15</b>\n']
+        medals = [
+            '<tg-emoji emoji-id="5469896127132231345">🥇</tg-emoji>',
+            "🥈","🥉"
+        ] + ["🏅"]*12
         for i, (u_id_str, u_data, ref_count) in enumerate(top):
             name   = u_data.get("name") or u_data.get("first_name") or f"ID:{u_id_str}"
             uname  = u_data.get("username") or ""
@@ -7846,8 +7853,8 @@ async def cb_premium_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
             earnings = int(u_data.get("referral_earnings") or 0)
             lines.append(
                 f"{medals[i]} <b>{i+1}.</b> {name}\n"
-                f"   👤 {uname_txt}  |  🆔 <code>{u_id_str}</code>\n"
-                f"   👥 Yig'ganlar: <b>{ref_count} ta</b>  |  💰 <b>{earnings:,} so'm</b>"
+                f'   <tg-emoji emoji-id="5818715087237549366">👤</tg-emoji> {uname_txt}  |  <tg-emoji emoji-id="5818885490065017876">🆔</tg-emoji> <code>{u_id_str}</code>\n'
+                f'   <tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Yig\'ganlar: <b>{ref_count} ta</b>  |  <tg-emoji emoji-id="5228841963817570494">💰</tg-emoji> <b>{earnings:,} so\'m</b>'
             )
         new_text = "\n".join(lines)
         new_kb = ikb([[ibtn("🔄 Yangilash", data="top_ref_refresh", style="primary"),
