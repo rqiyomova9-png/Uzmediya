@@ -7950,11 +7950,38 @@ def main():
             else:
                 DB_STATUS.update({"storage_ok": False, "ram_only": True, "last_err": now_str})
                 storage_msg = f"🔴 PostgreSQL ishlamayapti! Bot RAMdan ishlaydi."
+
+            # Foydalanuvchi sonini bazadan olish
+            db_user_count = len(RAM.users)  # fallback — baza ishlamasa RAMdan
+            try:
+                def _get_db_user_count():
+                    conn = _get_pg_conn()
+                    if not conn:
+                        return None
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT jsonb_array_length(ARRAY(SELECT jsonb_object_keys(value->'users'))) "
+                                "FROM bot_data WHERE key = 'main'"
+                            )
+                            row = cur.fetchone()
+                        conn.close()
+                        return row[0] if row else None
+                    except Exception:
+                        try: conn.close()
+                        except: pass
+                        return None
+                count = await asyncio.to_thread(_get_db_user_count)
+                if count is not None:
+                    db_user_count = count
+            except Exception:
+                pass
+
             webhook_url = f"{RAILWAY_URL}{CHECKCARD_WEBHOOK_PATH}"
             await context_job.bot.send_message(
                 ADMIN_ID,
-                f"🚀 <b>Bot v20 Railway da ishga tushdi!</b>\n\n"
-                f"💾 RAM: <b>{len(RAM.movies)}</b> kino, <b>{len(RAM.users)}</b> user\n"
+                f"🚀 <b>Bot Azizbek Dasturchi tomonidan — Uzmediya bot ishga tushti!</b>\n\n"
+                f"💾 RAM: <b>{len(RAM.movies)}</b> kino, <b>{db_user_count}</b> user\n"
                 f"📦 Storage: {storage_msg}\n\n"
                 f"💳 CheckCard Webhook URL:\n<code>{webhook_url}</code>\n"
                 f"<i>(Bu URLni @CheckCardUz_bot ga webhook sifatida kiriting)</i>\n\n"
@@ -7987,7 +8014,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info(f"🚀 Bot v20 Railway ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
+    logger.info(f"🚀 Bot AzizbeknDasturchi tomonidan — Uzmediya bot ishga tushti! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query", "chat_join_request"],
