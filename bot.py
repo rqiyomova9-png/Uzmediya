@@ -4996,7 +4996,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kino_kanal_set", "qism_tahrir", "admin_qosh",
             "premium_ber", "start_xab", "qism_och", "foydalanuvchi_blok",
             "tolovlar", "premium_plan_manage", "referral_narxi",
-            "admin_lichka_set",
+            "admin_lichka_set", "top_referrers",
         ]
         # Ham to'liq matn, ham emoji-siz matn bilan tekshiramiz
         all_admin_btns = {}
@@ -5152,12 +5152,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👉 {ref_link}"
         )
         txt = (
-            f"🎁 <b>Do'st taklif qilish</b>\n\n"
+            f'<tg-emoji emoji-id="5193085063998224234">🎁</tg-emoji> <b>Do\'st taklif qilish</b>\n\n'
             f"Sizning referral havolangiz:\n"
             f"<code>{ref_link}</code>\n\n"
-            f"👥 Hozircha taklif qilgan do'stlar: <b>{ref_count} ta</b>\n"
-            f"💰 Har bir do'st uchun: <b>{amount:,} so'm</b>\n\n"
-            f"Do'stlaringizga ulashing va pul ishlang! 🚀"
+            f'<tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Hozircha taklif qilgan do\'stlar: <b>{ref_count} ta</b>\n'
+            f'<tg-emoji emoji-id="5228841963817570494">💰</tg-emoji> Har bir do\'st uchun: <b>{amount:,} so\'m</b>\n\n'
+            f"Do\'stlaringizga ulashing va pul ishlang! 🚀"
         )
         kb = ikb([
             [ibtn("📤 Ulashish", url=f"https://t.me/share/url?url={ref_link}&text={share_text.replace('<b>', '').replace('</b>', '')}", style="success")],
