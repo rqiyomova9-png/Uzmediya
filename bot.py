@@ -5331,9 +5331,7 @@ async def admin_buttons(update, context, text: str):
         context.user_data["admin_state"] = "set_install"
         await sm(context.bot, uid,
             "📹 <b>Bot qo'llanma videosi</b>\n\n"
-            "Video yuboring. Video <b>captioniga</b> izoh yozsangiz — start menyuda "
-            "shu izoh ko'rsatiladi.\n\n"
-            "<i>Faqat video qabul qilinadi.</i>")
+            "Video yuboring:")
         return
 
     if _btn_match("kino_joy"):
@@ -7082,15 +7080,11 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_any_admin(uid) and state == "set_install":
         if msg.video:
             RAM.settings["install_video_id"] = msg.video.file_id
-            # caption (premium emojilar bilan) — agar yuborilgan bo'lsa
-            cap_html = text_with_premium_emojis(msg) if msg.caption else ""
-            if cap_html:
-                RAM.settings["install_caption"] = cap_html
+            RAM.settings["install_caption"] = ""  # caption kodda avtomatik yoziladi
             await save_now()
             context.user_data.pop("admin_state", None)
-            cap_info = "\n📝 Caption ham saqlandi." if cap_html else ""
             await sm(context.bot, uid,
-                f"✅ Bot qo'llanma videosi saqlandi!{cap_info}",
+                f"✅ Bot qo'llanma videosi saqlandi!",
                 admin_menu_kb(uid))
         else:
             await sm(context.bot, uid, "⚠️ Faqat <b>video</b> yuboring (document/fayl emas):")
