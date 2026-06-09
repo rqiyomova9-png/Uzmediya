@@ -5128,12 +5128,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name      = user_obj.full_name or "Noma'lum"
         txt = (
             f'<tg-emoji emoji-id="5228841963817570494">💰</tg-emoji> <b>Balansingiz</b>\n\n'
-            f"👤 Ism: <b>{name}</b>\n"
-            f"🆔 ID: <code>{uid}</code>\n\n"
-            f"💵 Joriy balans: <b>{balance:,} so'm</b>\n"
-            f"📥 Jami kiritilgan: <b>{topup_tot:,} so'm</b>\n"
-            f"👥 Taklif qilgan do'stlar: <b>{ref_count} ta</b>\n"
-            f"🎁 Referral daromad: <b>{ref_earn:,} so'm</b>"
+            f'<tg-emoji emoji-id="5818715087237549366">👤</tg-emoji> Ism: <b>{name}</b>\n'
+            f'<tg-emoji emoji-id="5818885490065017876">🆔</tg-emoji> ID: <code>{uid}</code>\n\n'
+            f'<tg-emoji emoji-id="5213170203680060059">💵</tg-emoji> Joriy balans: <b>{balance:,} so\'m</b>\n'
+            f'<tg-emoji emoji-id="5443127283898405358">📥</tg-emoji> Jami kiritilgan: <b>{topup_tot:,} so\'m</b>\n'
+            f'<tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Taklif qilgan do\'stlar: <b>{ref_count} ta</b>\n'
+            f'<tg-emoji emoji-id="5193085063998224234">🎁</tg-emoji> Referral daromad: <b>{ref_earn:,} so\'m</b>'
         )
         sent_balans = await sm(context.bot, uid, txt, balans_kb())
         if sent_balans:
