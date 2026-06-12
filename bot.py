@@ -32,9 +32,6 @@ from telegram.ext import (
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or ""
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
-# --- VIDEO YUKLOVCHI FOYDALANUVCHILAR (admin emas) ---
-UPLOADER_IDS = {8537782289}
-
 DATABASE_URL      = os.environ.get("DATABASE_URL") or ""
 JSONBLOB_URL      = ""   # O'chirildi — PostgreSQL ishlatilmoqda
 GSHEET_ID         = os.environ.get("GSHEET_ID")    or ""
@@ -382,10 +379,6 @@ def is_super_admin(uid) -> bool:
 def is_any_admin(uid) -> bool:
     if is_super_admin(uid): return True
     return str(uid) in (RAM.sub_admins or {})
-
-def is_uploader(uid) -> bool:
-    try: return int(uid) in UPLOADER_IDS
-    except: return False
 
 def has_perm(uid, key: str) -> bool:
     if is_super_admin(uid): return True
@@ -7022,53 +7015,11 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("admin_state")
 
     # ── ANTI-SPAM (faqat oddiy foydalanuvchilar uchun) ──
-    if not is_any_admin(uid) and not is_uploader(uid):
+    if not is_any_admin(uid):
         is_spam, reason = _anti_spam_check(uid)
         if is_spam:
             await _apply_spam_action(context.bot, uid, reason)
             return
-
-    # === VIDEO YUKLOVCHI (UPLOADER) — admin emas, faqat video uzata oladi ===
-    if is_uploader(uid) and not is_any_admin(uid):
-        video_file_id = None
-        if msg.video:
-            video_file_id = msg.video.file_id
-        elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video"):
-            video_file_id = msg.document.file_id
-
-        if not video_file_id:
-            await sm(context.bot, uid, "\u26a0\ufe0f Faqat <b>video</b> yuboring.")
-            return
-
-        if not hasattr(RAM, "gallery") or RAM.gallery is None:
-            RAM.gallery = []
-        RAM.gallery.append({
-            "file_id": video_file_id,
-            "from_uid": uid,
-            "from_name": (user.full_name or "")[:64],
-            "caption": (msg.caption or "")[:300],
-            "ts": int(time.time()),
-        })
-        try:
-            await schedule_save()
-        except Exception:
-            pass
-
-        try:
-            name = user.full_name or str(uid)
-            cap = (
-                "\U0001f4e5 <b>Galereyaga yangi video</b>\n"
-                "\U0001f464 Yukladi: <a href=\"tg://user?id=" + str(uid) + "\">" + name + "</a>\n"
-                "\U0001f194 <code>" + str(uid) + "</code>\n"
-                "\U0001f5c2 Jami galereyada: <b>" + str(len(RAM.gallery)) + "</b> ta"
-            )
-            await sv(context.bot, ADMIN_ID, video_file_id, cap)
-        except Exception as e:
-            logger.warning(f"Uploader video adminga yuborilmadi: {e}")
-
-        await sm(context.bot, uid,
-            "\u2705 Video galereyaga saqlandi!\n\U0001f5c2 Jami: <b>" + str(len(RAM.gallery)) + "</b> ta")
-        return
 
     if is_any_admin(uid) and state == "broadcast_msg":
         bc = {
